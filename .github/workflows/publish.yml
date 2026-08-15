@@ -45,15 +45,13 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          # Derive the version straight from the env-var TAG (never via a
-          # bare shell variable: `VERSION=x` is not exported to `node`, so
-          # process.env.VERSION would be undefined and JSON.stringify would
-          # DROP the version field — pnpm then fails with
-          # PACKAGE_VERSION_NOT_FOUND after prepack).
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));p.version=process.env.TAG.replace(/^v/,'');fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
-          node -e "const v=require('./package.json').version; if(!v){console.error('version rewrite failed'); process.exit(1)}; console.log('publishing version:', v)"
+          # The version lives in package.json; the tag must MATCH it. Fail
+          # fast with a clear message instead of rewriting (a rewrite can
+          # silently drop the field via JSON.stringify, which makes pnpm
+          # fail with PACKAGE_VERSION_NOT_FOUND after prepack).
+          node -e "const p=require('./package.json');const tag=process.env.TAG.replace(/^v/,'');if(p.version!==tag){console.error('package.json version '+p.version+' does not match tag '+process.env.TAG+' — bump package.json first, commit, then tag');process.exit(1)}console.log('publishing version:',p.version)"
           echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
-          # --no-git-checks: the version was just rewritten from the tag, so
-          # pnpm's "tag matches version / clean tree" checks do not apply.
-          # prepack runs `pnpm build`, shipping a fresh lib/.
+          # --no-git-checks: CI checkout may not carry the tag locally, so
+          # pnpm's own tag/version git check is unreliable here; our explicit
+          # match check above is authoritative. prepack runs `pnpm build`.
           pnpm publish --no-git-checks

@@ -26,12 +26,14 @@ and otherwise keeps loading the stale `lib/`.
 
 ## Releasing
 
-Tag-driven: `git tag v0.0.1 && git push origin v0.0.1` triggers
-`.github/workflows/publish.yml`, which rewrites `package.json` version from
-the tag, runs typecheck + tests, and publishes to npm with the `NPM_TOKEN`
-repository secret. Never bump the version in `package.json` by hand — the tag
-is the source of truth. `lib/` is gitignored, so the workflow relies on
-`prepack: pnpm build` to ship a fresh build.
+Tag-driven, version checked not rewritten: bump `package.json` `version`
+first (commit it), then tag with the matching version —
+`git tag v0.0.1 && git push origin main && git push --force origin v0.0.1`.
+`.github/workflows/publish.yml` fails fast when `package.json` version does
+not match the tag, runs typecheck + tests, and publishes to npm with the
+`NPM_TOKEN` repository secret (must be a bypass-2FA token). `lib/` is
+gitignored, so the workflow relies on `prepack: pnpm build` to ship a fresh
+build.
 
 ## Layout
 
