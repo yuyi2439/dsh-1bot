@@ -4,6 +4,9 @@
 // session; inbound messages drive turns; the final assistant text is routed
 // back to the originating chat. The bridge owns the allowlist, the QQ in-chat
 // approval round-trip (同意/拒绝), and reply chunking.
+import { mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { Context } from "@deepseek-ai/cordis";
 import type { AgentHandle } from "@deepseek-ai/dsh-agent";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
@@ -30,9 +33,29 @@ import type { BridgeServices, OnebotConfig, OnebotService } from "./types.ts";
 /** Default max characters per outbound QQ message. */
 const MAX_MESSAGE_CHARS = 4000;
 
-/** Map a OneBot session id back to its reply route. */
+/**
+ * The default per-chat workspace root. STABLE on purpose: it must not depend
+ * on the launch directory, or the same chat session would be persisted at a
+ * different cwd after `dsh` starts elsewhere and the session store rejects
+ * the id (persisted-vs-live cwd collision).
+ */
+export function defaultWorkspaceRoot(): string {
+	const home = process.env.DSH_HOME ?? join(homedir(), ".dsh");
+	return join(home, "workspaces", "onebot");
+}
+
+/** Derive one chat's workspace folder under the configured root. */
+export function chatWorkspace(workspaceRoot: string, sessionId: string): string {
+	return join(workspaceRoot, "chats", sessionId);
+}
+
+/**
+ * Map a OneBot session id back to its reply route. The id deliberately uses
+ * `-` separators (`onebot-private-<QQ>` / `onebot-group-<群号>`) so the JSONL
+ * backend stores it verbatim — `:` would be escaped to `~003A` on disk.
+ */
 export function sessionToRoute(sessionId: string): ChatRoute | null {
-	const m = /^onebot:(private|group):(\d+)$/.exec(String(sessionId ?? ""));
+	const m = /^onebot-(private|group)-(\d+)$/.exec(String(sessionId ?? ""));
 	if (!m) return null;
 	return m[1] === "private"
 		? { kind: "private", user_id: Number(m[2]) }
@@ -43,13 +66,13 @@ export function sessionToRoute(sessionId: string): ChatRoute | null {
 function routeForMessage(msg: OneBotMessageEvent): { sessionId: string; prefix: string } | null {
 	if (msg.message_type === "private") {
 		return {
-			sessionId: `onebot:private:${msg.user_id}`,
+			sessionId: `onebot-private-${msg.user_id}`,
 			prefix: `[好友 ${identity(msg.sender, msg.user_id)}] `,
 		};
 	}
 	if (msg.message_type === "group" && msg.group_id != null) {
 		return {
-			sessionId: `onebot:group:${msg.group_id}`,
+			sessionId: `onebot-group-${msg.group_id}`,
 			prefix: `[群 ${msg.group_id} ${identity(msg.sender, msg.user_id)}] `,
 		};
 	}
@@ -259,14 +282,19 @@ export class OneBotBridge {
 	/**
 	 * Get (or create) the agent for a chat session. Creation mirrors
 	 * `dsh-headless`: default model selection + per-agent model install.
+	 * Each chat gets its own dynamic workspace folder
+	 * (`<workspace_root>/chats/<sessionId>`, created on first use), so files
+	 * and the session's cwd stay isolated per conversation.
 	 */
 	private async ensureAgent(sessionId: string): Promise<AgentHandle> {
 		const existing = this.agentHandles.get(sessionId);
 		if (existing) return existing;
+		const cwd = chatWorkspace(this.config.workspace_root ?? defaultWorkspaceRoot(), sessionId);
+		await mkdir(cwd, { recursive: true });
 		const selection = this.agentDefaultModel?.currentSelection();
 		const handle = await this.agents.create({
 			sessionId: SessionId(sessionId),
-			meta: { cwd: this.config.cwd ?? process.cwd() },
+			meta: { cwd },
 			agentOptions: selection ? { provider: selection.provider, model: selection.model } : {},
 			setup: selection
 				? (agentCtx) => {

@@ -8,6 +8,16 @@
 # file. Remember: an id-targeted patch REPLACES the row's whole config, so a
 # user override must restate every field it keeps.
 
+# Isolate onebot session persistence from $DSH_HOME/sessions. The web UI
+# resumes any session it can see when you open it (agents.resume), which makes
+# it a second live writer on the same log and corrupts it (duplicate seq).
+# Sessions under sessions-hidden use the exact same jsonl backend/defaults —
+# only the root differs, so the web profile (which scans sessions/) can never
+# see or resume them.
+- id: session-persistence-jsonl
+  config:
+    root: !!js dshHomePath('sessions-hidden')
+
 - insert:
     - id: onebot
       name: 'dsh-onebot'

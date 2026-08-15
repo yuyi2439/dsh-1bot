@@ -42,7 +42,7 @@ function assertOk(resp: OneBotResponse, action: string, hint?: string): void {
 /** Compatibility hint for the NapCat/go-cqhttp extended friend-history API. */
 const FRIEND_HISTORY_HINT =
 	"get_friend_msg_history is a NapCat/go-cqhttp extension; this OneBot implementation may not " +
-	"support reading private chat history — for a single message use onebot_get_msg instead";
+	"support reading private chat history — for a single message use onebot_get_content instead";
 
 /**
  * Register every OneBot tool on `ctx.tools`.
@@ -55,7 +55,7 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 		defineTool({
 			name: "onebot_send",
 			description:
-				"Send a message to a QQ conversation session. target is private:<QQ> or group:<群号>; the target must be allowlisted or explicitly approved by the user.",
+				"Send a message to a QQ conversation session. target is private:<QQ> or group:<群号>; the target must be allowlisted or explicitly approved by the user. IMPORTANT: your reply to the chat you are CURRENTLY talking in is delivered automatically at the end of the turn — do not use this tool to reply there, only to message OTHER chats.",
 			parameters: {
 				target: {
 					type: "string",
@@ -118,9 +118,9 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 
 	ctx.tools.register(
 		defineTool({
-			name: "onebot_read",
+			name: "onebot_get_msg_history",
 			description:
-				"Read recent messages of a QQ chat via the OneBot connection: group history (get_group_msg_history) or private/friend history (get_friend_msg_history). target is private:<QQ> or group:<群号>. Returns the last N messages as text.",
+				"Read the recent message history of a QQ chat via the OneBot connection: group history (get_group_msg_history) or private/friend history (get_friend_msg_history). target is private:<QQ> or group:<群号>. Returns the last N messages as text.",
 			parameters: {
 				target: {
 					type: "string",
@@ -169,9 +169,9 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 
 	ctx.tools.register(
 		defineTool({
-			name: "onebot_get_msg",
+			name: "onebot_get_content",
 			description:
-				"Get a specific QQ message by its message id (e.g. the id in a [reply msg id:...] or [record msg id:...] segment) and return sender, time and full text.",
+				"Get the full content of a specific QQ message by its message id (e.g. the id in a [reply msg id:...], [image msg id:...] or [record msg id:...] segment) and return sender, time and full text.",
 			parameters: {
 				message_id: {
 					type: "string",

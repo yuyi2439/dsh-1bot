@@ -5,8 +5,11 @@
 // dsh-nota).
 import type { Context, Message } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
+import { join } from "node:path";
 import { OneBotClient } from "./client.ts";
-import { OneBotBridge } from "./bridge.ts";
+import { OneBotBridge, defaultWorkspaceRoot } from "./bridge.ts";
+import { ensureHiddenSessionsDocs, hiddenSessionsRoot } from "./hidden-sessions.ts";
+import { acquireSingletonLock } from "./singleton.ts";
 import { registerOneBotTools } from "./tools.ts";
 import type { OnebotConfig, OnebotService } from "./types.ts";
 
@@ -40,8 +43,9 @@ export const Config: z<OnebotConfig> = z.object({
 	friend_ids: z.array(z.number()).default([]),
 	/** Allowlisted group ids. Empty list = no group. */
 	group_ids: z.array(z.number()).default([]),
-	/** Session workspace root for created agents (default: process.cwd()). */
-	cwd: z.string(),
+	/** Root for per-chat workspaces; each chat session gets
+	 * `<workspace_root>/chats/<sessionId>` (default: `$DSH_HOME/workspaces/onebot`). */
+	workspace_root: z.string(),
 	/** Max characters per outbound QQ message (chunked above this). */
 	reply_chunk_size: z.number().default(4000),
 	/** Seconds a QQ in-chat approval waits before settling `cancelled`. */
@@ -74,12 +78,30 @@ function formatLogLine(message: Message): string {
 /**
  * Mount the OneBot UI surface. No-op unless `enabled` and `mode === "ws"`.
  */
-export function apply(ctx: Context, config: OnebotConfig): void {
+export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 	if (!config.enabled) return;
 	if (config.mode !== "ws") {
 		ctx.logger?.("onebot").warn?.(`onebot: unsupported mode '${config.mode}', only 'ws' is implemented`);
 		return;
 	}
+	// Single-instance guard: two dsh processes bridging the same chats append
+	// to the same persisted sessions with independent seq counters, which
+	// corrupts the logs. Refuse to start when another live instance holds the
+	// lock, instead of silently corrupting shared sessions.
+	const log = ctx.logger?.("onebot") ?? console;
+	const workspaceRoot = config.workspace_root ?? defaultWorkspaceRoot();
+	const releaseLock = await acquireSingletonLock(join(workspaceRoot, ".onebot.lock"));
+	if (!releaseLock) {
+		log.error?.(
+			`another dsh-onebot instance is already running (lock held at ${join(workspaceRoot, ".onebot.lock")}) — ` +
+				"refusing to start; stop the other instance first (two instances corrupt the shared chat sessions)",
+		);
+		return;
+	}
+	// Create the hidden sessions root (where session-persistence-jsonl stores
+	// these sessions) together with its explanatory README, so anyone opening
+	// the directory understands why it exists outside the web-scanned root.
+	await ensureHiddenSessionsDocs(hiddenSessionsRoot());
 	// dsh-base mounts no console exporter, so register one for the `onebot`
 	// logger when the profile should be observable from the terminal.
 	// `default: -1` is load-bearing: without it every other plugin's info
@@ -94,7 +116,6 @@ export function apply(ctx: Context, config: OnebotConfig): void {
 			},
 		});
 	}
-	const log = ctx.logger?.("onebot") ?? console;
 	log.info?.(
 		`starting: ws_url=${config.ws_url} mode=${config.mode} ` +
 			`friends=[${config.friend_ids.join(",")}] groups=[${config.group_ids.join(",")}]`,
@@ -130,13 +151,18 @@ export function apply(ctx: Context, config: OnebotConfig): void {
 	client.start();
 	registerOneBotTools(ctx, bridge);
 	bridge.registerApprovalAnswerer();
+	// dsh-onebot is an ADAPTER only: no prompt/persona injection here (that
+	// belongs to the persona layer, dsh-nota). The onebot_send tool's own
+	// description carries the reply contract ("your reply is delivered
+	// automatically — don't use it to reply in the current chat").
 	ctx.provide("onebot", bridge.publicService());
-	// Tear down on plugin unload (e.g. HMR): stop the socket loop and dispose
-	// every chat agent and pending approval.
+	// Tear down on plugin unload (e.g. HMR): stop the socket loop, dispose
+	// every chat agent and pending approval, and release the singleton lock.
 	ctx.effect(
-		() => () => {
+		() => async () => {
 			client.stop();
 			bridge.dispose();
+			await releaseLock();
 		},
 		"onebot: teardown",
 	);

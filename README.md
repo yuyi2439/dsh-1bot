@@ -47,23 +47,26 @@ dsh --profile onebot
 | `prefix` | `""` | 只回复以它开头的消息，并剥掉前缀 |
 | `friend_ids` | `[]` | 私聊白名单；空 = 无人可入 |
 | `group_ids` | `[]` | 群白名单；空 = 无群可入 |
-| `cwd` | `process.cwd()` | agent 会话工作区根 |
+| `workspace_root` | `$DSH_HOME/workspaces/onebot` | 聊天工作区根；每聊天一个 `<root>/chats/<sessionId>` 子目录（自动创建）。**稳定路径**，勿用随启动目录变化的路径，否则会话 cwd 冲突 |
 | `reply_chunk_size` | `4000` | 出站消息分块上限 |
 | `approval_timeout_secs` | `300` | QQ 内审批超时（秒） |
 | `console_log` | `true` | 把 onebot 日志打到控制台 |
 
 ## 工具
 
-`onebot_send`、`onebot_read`（群/私聊历史）、`onebot_get_msg`、`onebot_status`（含连接状态）、
+`onebot_send`、`onebot_get_msg_history`（群/私聊历史）、`onebot_get_content`、`onebot_status`（含连接状态）、
 `onebot_voice_text`。统一 `onebot_` 前缀（`send_message` 是子 agent 控制的保留名）。
+**当前聊天的回复会自动发回，模型不需要也不应该对当前聊天调用 `onebot_send`**（工具描述里已声明；本插件不注入 prompt，那属于 persona 层）。
 非白名单出站走 QQ 内审批：聊天里回复「同意」/「拒绝」（可带序号）裁决，超时/断连 fail-closed。
 
 ## 行为要点
 
-- 入站非文本段渲染为 `[image msg id:N]` 占位符，模型用 `onebot_get_msg` / `onebot_voice_text` 取内容。
-- 每聊天一个 agent/session（`onebot:private:<QQ>` / `onebot:group:<群号>`），JSONL 持久化、可 resume。
+- 入站非文本段渲染为 `[image msg id:N]` 占位符，模型用 `onebot_get_content` / `onebot_voice_text` 取内容。
+- 每聊天一个 agent/session（`onebot-private-<QQ>` / `onebot-group-<群号>`，用 `-` 分隔避免磁盘转义），JSONL 持久化、可 resume；每聊天一个独立工作区 `<workspace_root>/chats/<sessionId>`。
 - 白名单为空 = 所有消息被忽略（启动时控制台会警告）。
 - 日志形如 `[onebot info] 2026-…`；连不上 NapCat 会看到 `reconnecting` 重连循环。
+- **单实例**：第二个 dsh-onebot 进程会因锁（`<workspace_root>/.onebot.lock`）拒绝启动 —— 两个实例同时写同一会话会损坏日志。
+- **会话与 web 隔离**：onebot 会话持久化在 `$DSH_HOME/sessions-hidden`（非 `sessions/`）。web UI 打开它可见的会话会 resume 成第二个写入者导致日志损坏，隔离后 web 看不到也碰不到；监视请用 onebot 进程控制台日志。
 
 ## 开发
 

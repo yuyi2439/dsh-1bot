@@ -54,22 +54,60 @@ test/         node:test, imports src/*.ts directly
    when `retcode` is absent; otherwise throw a model-facing error (with the
    action name / status / retcode / data detail).
    `get_friend_msg_history` is a NapCat/go-cqhttp extension — on incompatibility
-   error out and suggest `onebot_get_msg` instead of silently treating it as
-   "no messages".
-6. **The console exporter's `levels` must include `default: -1`**: write
+   error out and suggest `onebot_get_content` instead of silently treating it
+   as "no messages".
+6. **Never auto-suppress the reply — guide the model via the TOOL
+   DESCRIPTION, never prompt injection**: the bridge always sends the final
+   assistant text to the source chat. Double answers happen when the model
+   replies via `onebot_send` in the current chat; the fix is the `onebot_send`
+   description ("reply is delivered automatically; do not use this tool to
+   reply in the current chat"), NOT post-hoc skip logic. dsh-onebot is an
+   ADAPTER only: it must never register system-prompt sections or persona
+   (that belongs to the persona layer, dsh-nota).
+7. **The console exporter's `levels` must include `default: -1`**: write
    `{ onebot: 2, default: -1 }` so only the onebot logger passes. `{ onebot: 2 }`
    alone leaks every other plugin's info logs to the console; the
    `[onebot info]` label comes from `message.name`, never hardcode it.
-7. **Tear down with `ctx.effect(() => () => {...})`** (cordis 4 has no typed
+8. **Tear down with `ctx.effect(() => () => {...})`** (cordis 4 has no typed
    `dispose` event); the cleanup must call both `client.stop()` and
    `bridge.dispose()`, or HMR reloads leave zombie connections.
-8. **Session id format** `onebot:private:<QQ>` / `onebot:group:<群号>`
-   (reversed by `sessionToRoute`; the JSONL backend escapes ids into safe path
-   segments, colons are fine).
-9. **Profile user-layer patches replace the whole config**: when editing
-   `$DSH_HOME/profiles/onebot/cordis.patch.yml`, restate every field you keep.
-10. **`lib/` is gitignored**: commits/release only carry `src/` and
+9. **Session id format** `onebot-private-<QQ>` / `onebot-group-<群号>`
+   (reversed by `sessionToRoute`). Separators are `-` on purpose: `:` would be
+   escaped to `~003A` on disk by the JSONL backend (Windows-safe path
+   segments), `-` stays verbatim.
+10. **Profile user-layer patches replace the whole config**: when editing
+    `$DSH_HOME/profiles/onebot/cordis.patch.yml`, restate every field you keep.
+11. **`lib/` is gitignored**: commits/release only carry `src/` and
     `cordis.patch.yml`; the npm `files` field ships only the built `lib/`.
+12. **`ctx.onebot`**: runtime = `ctx.provide("onebot", service)` in apply
+    (auto-disposed with the plugin fiber); type side = the
+    `declare module "@deepseek-ai/cordis"` augmentation in src/index.ts.
+    Consumers read it via `ctx.onebot` / `ctx.get("onebot")`.
+13. **Session cwd must be launch-dir independent**: the default workspace
+    root is the stable `$DSH_HOME/workspaces/onebot`
+    (`defaultWorkspaceRoot()`), and each chat session gets
+    `<root>/chats/<sessionId>` (`chatWorkspace()`, created on first use).
+    Never derive the session cwd from `process.cwd()` — the session id is
+    stable across restarts, so a launch-dir-dependent cwd makes the store
+    reject the id with a persisted-vs-live cwd collision.
+14. **One instance only**: two `dsh` processes running the onebot plugin
+    against the same profile both bridge the same chats and append to the
+    same persisted sessions with independent seq counters, which CORRUPTS the
+    logs (duplicate/missing seq — the web UI then reports "corrupt session
+    log"). `apply` takes a pid lock at `<workspace_root>/.onebot.lock`
+    (`acquireSingletonLock`, src/singleton.ts) and refuses to start when
+    another live instance holds it; the teardown releases it. Never run the
+    onebot profile twice, and never also mount the onebot row in another
+    profile.
+15. **Onebot sessions live under `$DSH_HOME/sessions-hidden`, never
+    `sessions/`**: the web UI resumes any session it can see when you open it
+    (`agents.resume` in dsh-host-apiproxy), turning it into a second live
+    writer on the same log and corrupting it (duplicate seq). The bundle patch
+    overrides `session-persistence-jsonl.root` to `dshHomePath('sessions-hidden')`
+    — the same jsonl backend and defaults, only the root differs, so the web
+    profile (which scans `sessions/`) can neither see nor resume them. On
+    startup the plugin also creates the root and seeds `README.md` there
+    (`ensureHiddenSessionsDocs`, src/hidden-sessions.ts).
 
 ## How it works (event flow)
 
@@ -77,7 +115,9 @@ test/         node:test, imports src/*.ts directly
 QQ inbound ──► OneBotClient (forward WS) ──► Bridge.onMessageEvent
   · self-messages (user_id===self_id) / allowlist gate / approval commands (同意/拒绝) are intercepted here, never reach the agent
   · non-text segments → `[<type> msg id:<id>]`; identity prefix `[好友 A(QQ)]` / `[群 N A(QQ)]`
-→ enqueueTurn (serialized per chat) → ensureAgent (agents.create + default model selection + installModelSelection)
+→ enqueueTurn (serialized per chat) → ensureAgent (agents.create + default
+   model selection + installModelSelection; session cwd =
+   `workspace_root/chats/<sessionId>`, mkdir -p first)
 → agent.followup(userMessage) → whenIdle() → sessions.flush()
 → fold the event interval (from firstSeq) for the last non-empty assistant text
 → sendReply: chunked (reply_chunk_size) → send_private_msg / send_group_msg

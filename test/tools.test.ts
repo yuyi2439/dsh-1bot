@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import { registerOneBotTools } from "../src/tools.ts";
+import { chatWorkspace, defaultWorkspaceRoot, sessionToRoute } from "../src/bridge.ts";
 import type { OneBotBridge } from "../src/bridge.ts";
 import type { OneBotAction } from "../src/protocol.ts";
 
@@ -33,15 +34,15 @@ test("registers the onebot_* tool family", () => {
 	const defs = collectTools({ api: { call: async () => ({}) } });
 	const names = defs.map((def) => def.name).sort();
 	assert.deepEqual(names, [
-		"onebot_get_msg",
-		"onebot_read",
+		"onebot_get_content",
+		"onebot_get_msg_history",
 		"onebot_send",
 		"onebot_status",
 		"onebot_voice_text",
 	]);
 });
 
-test("onebot_read routes group vs private history actions", async () => {
+test("onebot_get_msg_history routes group vs private history actions", async () => {
 	const calls: OneBotAction[] = [];
 	const bridge = {
 		api: {
@@ -51,7 +52,7 @@ test("onebot_read routes group vs private history actions", async () => {
 			},
 		},
 	};
-	const read = collectTools(bridge).find((def) => def.name === "onebot_read");
+	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
 	assert.ok(read);
 
 	const group = (await read!.execute({ target: "group:30003", limit: 5 }, noExec)) as { target: string };
@@ -67,7 +68,7 @@ test("onebot_read routes group vs private history actions", async () => {
 	assert.equal(priv.target, "private:42");
 });
 
-test("onebot_read rejects invalid targets and limits without calling", async () => {
+test("onebot_get_msg_history rejects invalid targets and limits without calling", async () => {
 	let called = false;
 	const bridge = {
 		api: {
@@ -77,14 +78,14 @@ test("onebot_read rejects invalid targets and limits without calling", async () 
 			},
 		},
 	};
-	const read = collectTools(bridge).find((def) => def.name === "onebot_read");
+	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
 	await assert.rejects(read!.execute({ target: "bogus" }, noExec), /target must be/);
 	await assert.rejects(read!.execute({ target: "group:30003", limit: 200 }, noExec), /limit/);
 	await assert.rejects(read!.execute({ target: "group:30003", limit: 0 }, noExec), /limit/);
 	assert.equal(called, false);
 });
 
-test("onebot_read formats returned messages", async () => {
+test("onebot_get_msg_history formats returned messages", async () => {
 	const bridge = {
 		api: {
 			call: async () => ({
@@ -103,12 +104,12 @@ test("onebot_read formats returned messages", async () => {
 			}),
 		},
 	};
-	const read = collectTools(bridge).find((def) => def.name === "onebot_read");
+	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
 	const out = (await read!.execute({ target: "private:42" }, noExec)) as { text: string };
 	assert.ok(out.text.includes("A(42) 消息ID:1: hi"));
 });
 
-test("onebot_read errors directly when get_friend_msg_history is unsupported", async () => {
+test("onebot_get_msg_history errors directly when get_friend_msg_history is unsupported", async () => {
 	const bridge = {
 		api: {
 			call: async () => ({
@@ -118,14 +119,14 @@ test("onebot_read errors directly when get_friend_msg_history is unsupported", a
 			}),
 		},
 	};
-	const read = collectTools(bridge).find((def) => def.name === "onebot_read");
+	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
 	await assert.rejects(
 		read!.execute({ target: "private:42" }, noExec),
 		/get_friend_msg_history failed: status=failed retcode=1404, detail="不支持该接口".*NapCat\/go-cqhttp extension/,
 	);
 });
 
-test("onebot_read accepts a response without retcode when status is ok", async () => {
+test("onebot_get_msg_history accepts a response without retcode when status is ok", async () => {
 	let called = 0;
 	const bridge = {
 		api: {
@@ -135,20 +136,48 @@ test("onebot_read accepts a response without retcode when status is ok", async (
 			},
 		},
 	};
-	const read = collectTools(bridge).find((def) => def.name === "onebot_read");
+	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
 	const out = (await read!.execute({ target: "private:42" }, noExec)) as { text: string };
 	assert.equal(called, 1);
 	assert.equal(out.text, "chat private:42 has no readable recent messages");
 });
 
-test("onebot_read stays strict when retcode is missing and status is not ok", async () => {
+test("onebot_get_msg_history stays strict when retcode is missing and status is not ok", async () => {
 	const bridge = {
 		api: {
 			call: async () => ({ data: {} }),
 		},
 	};
-	const read = collectTools(bridge).find((def) => def.name === "onebot_read");
+	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
 	await assert.rejects(read!.execute({ target: "group:1" }, noExec), /get_group_msg_history failed/);
+});
+
+test("onebot_send describes the auto-reply contract", () => {
+	const def = collectTools({ api: { call: async () => ({}) } }).find((d) => d.name === "onebot_send");
+	assert.ok(def);
+	assert.match(def!.description, /delivered automatically/);
+	assert.match(def!.description, /do not use this tool to reply there/);
+});
+
+test("sessionToRoute parses the dash-separated session id", () => {
+	assert.deepEqual(sessionToRoute("onebot-private-2961354039"), { kind: "private", user_id: 2961354039 });
+	assert.deepEqual(sessionToRoute("onebot-group-551947633"), { kind: "group", group_id: 551947633 });
+	assert.equal(sessionToRoute("onebot:private:2961354039"), null); // old colon format is gone
+	assert.equal(sessionToRoute("web_abc"), null);
+	assert.equal(sessionToRoute(undefined as unknown as string), null);
+});
+
+test("chat workspaces derive stably under a fixed root", () => {
+	assert.equal(
+		chatWorkspace("C:/Users/yuyi2/.dsh/workspaces/onebot", "onebot-private-2961354039"),
+		"C:\\Users\\yuyi2\\.dsh\\workspaces\\onebot\\chats\\onebot-private-2961354039",
+	);
+	assert.equal(
+		chatWorkspace("C:/root", "onebot-group-551947633"),
+		"C:\\root\\chats\\onebot-group-551947633",
+	);
+	const def = defaultWorkspaceRoot();
+	assert.ok(def.includes("workspaces") && def.includes("onebot"));
 });
 
 test("onebot_status reports connection state without throwing", async () => {

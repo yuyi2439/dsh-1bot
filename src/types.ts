@@ -15,7 +15,8 @@ export interface OnebotConfig {
 	prefix: string;
 	friend_ids: number[];
 	group_ids: number[];
-	cwd?: string;
+	/** Root for per-chat workspaces (default: `$DSH_HOME/workspaces/onebot`). */
+	workspace_root?: string;
 	reply_chunk_size: number;
 	approval_timeout_secs: number;
 	console_log: boolean;
