@@ -1,7 +1,7 @@
 {
   "name": "dsh-1bot",
   "description": "OneBot 11 as a dsh UI surface: forward WebSocket protocol client, chat ⇄ agent bridge, and OneBot tools (a profile bundle over dsh-base)",
-  "version": "0.0.1",
+  "version": "0.0.2-rc.1",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
