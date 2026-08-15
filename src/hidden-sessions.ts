@@ -20,7 +20,7 @@ export function hiddenSessionsRoot(): string {
 /** English explanation left at the root of the hidden sessions directory. */
 export const SESSIONS_HIDDEN_README = `# sessions-hidden
 
-This directory holds the durable session logs of the **dsh-onebot** profile
+This directory holds the durable session logs of the **dsh-1bot** profile
 (OneBot / QQ as a dsh UI surface). It is intentionally NOT \`$DSH_HOME/sessions\`,
 the root the web UI scans.
 

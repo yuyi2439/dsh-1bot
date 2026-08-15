@@ -5,7 +5,7 @@ what and why, then follow this file when working on the code.
 
 ## What this is
 
-`dsh-onebot` is a Cordis plugin / dsh profile bundle that makes OneBot 11 (QQ)
+`dsh-1bot` is a Cordis plugin / dsh profile bundle that makes OneBot 11 (QQ)
 a dsh UI surface (same standing as web/tui). Each QQ chat maps to one dsh
 agent + session; inbound messages drive agent turns and the final assistant
 text is sent back to QQ; outbound messages and tool permissions outside the
@@ -72,7 +72,7 @@ test/         node:test, imports src/*.ts directly
    assistant text to the source chat. Double answers happen when the model
    replies via `onebot_send` in the current chat; the fix is the `onebot_send`
    description ("reply is delivered automatically; do not use this tool to
-   reply in the current chat"), NOT post-hoc skip logic. dsh-onebot is an
+   reply in the current chat"), NOT post-hoc skip logic. dsh-1bot is an
    ADAPTER only: it must never register system-prompt sections or persona
    (that belongs to the persona layer, dsh-nota).
 7. **The console exporter's `levels` must include `default: -1`**: write

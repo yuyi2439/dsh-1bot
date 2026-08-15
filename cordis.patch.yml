@@ -1,4 +1,4 @@
-# The dsh-onebot bundle patch: OneBot 11 as a UI surface, riding directly over
+# The dsh-1bot bundle patch: OneBot 11 as a UI surface, riding directly over
 # dsh-base (same service shape as web — a long-running front door — but the
 # "browser" is QQ via NapCat / LLOneBot over forward WebSocket). It mounts no
 # Host, HTTP server, Web runtime, or browser plugin.
@@ -20,7 +20,7 @@
 
 - insert:
     - id: onebot
-      name: 'dsh-onebot'
+      name: 'dsh-1bot'
       config:
         enabled: true
         mode: ws

@@ -1,4 +1,4 @@
-// dsh-onebot plugin entry: OneBot 11 as a dsh UI surface (profile bundle over
+// dsh-1bot plugin entry: OneBot 11 as a dsh UI surface (profile bundle over
 // dsh-base, on par with web/tui). Mounts the WS client, the chat ⇄ agent
 // bridge, the OneBot tools (onebot_* family), and the QQ in-chat approval
 // answerer, and exposes the `ctx.onebot` service for other plugins (e.g.
@@ -93,7 +93,7 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 	const releaseLock = await acquireSingletonLock(join(workspaceRoot, ".onebot.lock"));
 	if (!releaseLock) {
 		log.error?.(
-			`another dsh-onebot instance is already running (lock held at ${join(workspaceRoot, ".onebot.lock")}) — ` +
+			`another dsh-1bot instance is already running (lock held at ${join(workspaceRoot, ".onebot.lock")}) — ` +
 				"refusing to start; stop the other instance first (two instances corrupt the shared chat sessions)",
 		);
 		return;
@@ -151,7 +151,7 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 	client.start();
 	registerOneBotTools(ctx, bridge);
 	bridge.registerApprovalAnswerer();
-	// dsh-onebot is an ADAPTER only: no prompt/persona injection here (that
+	// dsh-1bot is an ADAPTER only: no prompt/persona injection here (that
 	// belongs to the persona layer, dsh-nota). The onebot_send tool's own
 	// description carries the reply contract ("your reply is delivered
 	// automatically — don't use it to reply in the current chat").
