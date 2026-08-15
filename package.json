@@ -22,13 +22,29 @@
     }
   },
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuyi2439/dsh-onebot.git"
+  },
+  "homepage": "https://github.com/yuyi2439/dsh-onebot",
+  "bugs": {
+    "url": "https://github.com/yuyi2439/dsh-onebot/issues"
+  },
+  "keywords": [
+    "dsh",
+    "onebot",
+    "qq",
+    "plugin",
+    "bundle"
+  ],
   "engines": {
-    "node": ">=23.6"
+    "node": ">=20"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json",
-    "test": "node --test --test-isolation=none \"test/*.test.ts\""
+    "test": "node --test --test-isolation=none \"test/*.test.ts\"",
+    "prepack": "pnpm build"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
