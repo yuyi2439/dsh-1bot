@@ -10,6 +10,8 @@ import type { OneBotAction, OneBotPostEvent, OneBotResponse } from "./protocol.t
 
 /** How long one correlated action call waits for its response. */
 const ACTION_TIMEOUT_MS = 15_000;
+/** How long one startup connection attempt may take before it counts as failed. */
+const CONNECT_TIMEOUT_MS = 10_000;
 /** A connection surviving this long is considered healthy; backoff resets. */
 const STABLE_CONNECTION_MS = 30_000;
 /** Reconnect backoff ceiling. */
@@ -67,10 +69,36 @@ export class OneBotClient {
 		this.messageHandler = handler;
 	}
 
-	/** Start (or restart) the connection loop. */
-	start(): void {
+	/**
+	 * Connect with bounded startup retries. Resolves once the first connection
+	 * is established (later drops keep the forever-reconnect loop alive) and
+	 * rejects when the server stays unreachable after `retries + 1` attempts
+	 * (1 initial + `retries` retries, `retryDelayMs` apart) — the caller turns
+	 * that into a fatal error instead of retrying forever at startup.
+	 */
+	start({ retries = 5, retryDelayMs = 1000 }: { retries?: number; retryDelayMs?: number } = {}): Promise<void> {
 		this.stopped = false;
-		this.connectLoop();
+		return new Promise((resolve, reject) => {
+			const attempt = (left: number): void => {
+				if (this.stopped) {
+					reject(new Error("onebot: client stopped during startup"));
+					return;
+				}
+				this.connectOnce().then((ok) => {
+					if (ok) {
+						resolve();
+						return;
+					}
+					if (left <= 0) {
+						reject(new Error(`onebot: could not connect to ${this.wsUrl} after ${retries + 1} attempts`));
+						return;
+					}
+					this.log.warn?.(`onebot: connection attempt failed; retrying in ${retryDelayMs}ms (${left} left)`);
+					setTimeout(() => attempt(left - 1), retryDelayMs);
+				});
+			};
+			attempt(retries);
+		});
 	}
 
 	/** Stop the client: force-close the socket and reject every pending call. */
@@ -89,36 +117,74 @@ export class OneBotClient {
 		this.failPending(new Error("onebot: client stopped"));
 	}
 
-	/** Run one connection attempt; schedule the next on close. */
+	/**
+	 * Open one connection and wire all handlers. Resolves `true` when the
+	 * socket opens; `false` when it errors/closes before opening, or when the
+	 * open takes longer than {@link CONNECT_TIMEOUT_MS}. Once opened, the
+	 * close handler schedules the forever-reconnect loop, so runtime drops
+	 * reconnect automatically.
+	 */
+	private connectOnce(): Promise<boolean> {
+		return new Promise((resolve) => {
+			const startedAt = Date.now();
+			const ws = new WebSocket(
+				this.wsUrl,
+				this.accessToken
+					? { headers: { Authorization: `Bearer ${this.accessToken}` } }
+					: undefined,
+			);
+			this.socket = ws;
+			let opened = false;
+			let settled = false;
+			const finish = (ok: boolean): void => {
+				if (settled) return;
+				settled = true;
+				resolve(ok);
+			};
+			const timer = setTimeout(() => {
+				this.log.warn?.(`onebot: connection to ${this.wsUrl} timed out`);
+				try {
+					ws.terminate();
+				} catch {
+					// ignore
+				}
+				finish(false);
+			}, CONNECT_TIMEOUT_MS);
+
+			ws.on("open", () => {
+				clearTimeout(timer);
+				opened = true;
+				this.log.info?.(`onebot: connected to ${this.wsUrl}`);
+				finish(true);
+			});
+			ws.on("message", (data) => {
+				this.handleMessage(String(data));
+			});
+			ws.on("error", (err) => {
+				this.log.warn?.(`onebot: websocket error: ${err.message}`);
+			});
+			ws.on("close", () => {
+				this.socket = null;
+				this.failPending(new Error("onebot: connection closed"));
+				if (!opened) {
+					clearTimeout(timer);
+					finish(false);
+					return;
+				}
+				// Was connected: schedule the forever-reconnect loop with backoff.
+				const stable = Date.now() - startedAt >= STABLE_CONNECTION_MS;
+				const backoff = stable ? 1000 : this.backoff;
+				this.backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
+				this.log.warn?.(`onebot: disconnected; reconnecting in ${backoff}ms`);
+				if (!this.stopped) setTimeout(() => this.connectLoop(), backoff);
+			});
+		});
+	}
+
+	/** Fire-and-forget reconnect entry used after the first successful connect. */
 	private connectLoop(): void {
 		if (this.stopped) return;
-		const startedAt = Date.now();
-		const ws = new WebSocket(
-			this.wsUrl,
-			this.accessToken
-				? { headers: { Authorization: `Bearer ${this.accessToken}` } }
-				: undefined,
-		);
-		this.socket = ws;
-
-		ws.on("open", () => {
-			this.log.info?.(`onebot: connected to ${this.wsUrl}`);
-		});
-		ws.on("message", (data) => {
-			this.handleMessage(String(data));
-		});
-		ws.on("close", () => {
-			this.socket = null;
-			this.failPending(new Error("onebot: connection closed"));
-			const stable = Date.now() - startedAt >= STABLE_CONNECTION_MS;
-			const backoff = stable ? 1000 : this.backoff;
-			this.backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
-			this.log.warn?.(`onebot: disconnected; reconnecting in ${backoff}ms`);
-			if (!this.stopped) setTimeout(() => this.connectLoop(), backoff);
-		});
-		ws.on("error", (err) => {
-			this.log.warn?.(`onebot: websocket error: ${err.message}`);
-		});
+		this.connectOnce();
 	}
 
 	/** Dispatch one inbound WS text frame: event or correlated response. */

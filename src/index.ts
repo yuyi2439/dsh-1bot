@@ -46,6 +46,11 @@ export const Config: z<OnebotConfig> = z.object({
 	/** Root for per-chat workspaces; each chat session gets
 	 * `<workspace_root>/chats/<sessionId>` (default: `$DSH_HOME/workspaces/onebot`). */
 	workspace_root: z.string(),
+	/** Startup connect retries after the first attempt; the process exits with
+	 * guidance when the server stays unreachable. */
+	connect_retries: z.number().default(5),
+	/** Delay between startup connect attempts (seconds). */
+	connect_retry_delay_secs: z.number().default(1),
 	/** Max characters per outbound QQ message (chunked above this). */
 	reply_chunk_size: z.number().default(4000),
 	/** Seconds a QQ in-chat approval waits before settling `cancelled`. */
@@ -148,7 +153,6 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 			log.warn?.(`onebot: event handling failed: ${err instanceof Error ? err.message : String(err)}`);
 		});
 	});
-	client.start();
 	registerOneBotTools(ctx, bridge);
 	bridge.registerApprovalAnswerer();
 	// dsh-1bot is an ADAPTER only: no prompt/persona injection here (that
@@ -156,6 +160,21 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 	// description carries the reply contract ("your reply is delivered
 	// automatically — don't use it to reply in the current chat").
 	ctx.provide("onebot", bridge.publicService());
+	// Connect with bounded startup retries; an unreachable server is fatal:
+	// log clear guidance and exit instead of retrying forever at startup.
+	try {
+		await client.start({
+			retries: config.connect_retries,
+			retryDelayMs: (config.connect_retry_delay_secs ?? 1) * 1000,
+		});
+	} catch (err) {
+		log.error?.(`${err instanceof Error ? err.message : String(err)}`);
+		log.error?.(
+			"OneBot 服务器连不上 —— 请检查 $DSH_HOME/profiles/onebot/cordis.patch.yml 中的 ws_url / access_token：" +
+				"NapCat 是否在运行、正向 WS 是否开启、地址/令牌是否正确，然后重新启动。",
+		);
+		process.exit(1);
+	}
 	// Tear down on plugin unload (e.g. HMR): stop the socket loop, dispose
 	// every chat agent and pending approval, and release the singleton lock.
 	ctx.effect(

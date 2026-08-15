@@ -40,7 +40,9 @@ build.
 ```
 src/
   index.ts    plugin entry: name/inject/Config/apply; console log exporter; ctx.onebot service
-  client.ts   OneBotClient: forward WS, echo-correlated call(), reconnect backoff (terminate-style stop)
+  client.ts   OneBotClient: forward WS, echo-correlated call(), bounded startup
+              retries (unreachable server → fatal exit), reconnect backoff
+              (terminate-style stop)
   bridge.ts   OneBotBridge: chat⇄agent, allowlist, outbound chunking, QQ in-chat approval answerer
   tools.ts    5 defineTool definitions (onebot_* family)
   protocol.ts protocol types + segment rendering/chunking/approval parsing/target parsing/action builders (dependency-free)
@@ -119,6 +121,12 @@ test/         node:test, imports src/*.ts directly
     profile (which scans `sessions/`) can neither see nor resume them. On
     startup the plugin also creates the root and seeds `README.md` there
     (`ensureHiddenSessionsDocs`, src/hidden-sessions.ts).
+16. **Startup connect failure is FATAL**: `client.start()` resolves only after
+    the first connection; `connect_retries` (default 5) attempts ×
+    `connect_retry_delay_secs` (default 1) later it rejects, and `apply` logs
+    guidance and calls `process.exit(1)`. Runtime drops after a successful
+    connect still reconnect forever (backoff) — only the STARTUP window is
+    bounded and fatal.
 
 ## How it works (event flow)
 

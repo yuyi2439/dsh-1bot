@@ -63,7 +63,7 @@ test("ws roundtrip: events forwarded, actions correlated by echo", async (t) => 
 	t.after(() => teardown(client, server));
 	const receivedEvents: Array<Record<string, unknown>> = [];
 	client.onMessage((event) => receivedEvents.push(event));
-	client.start();
+	await client.start();
 	await gotConnection;
 	await waitFor(() => client.isConnected());
 
@@ -120,7 +120,7 @@ test("sendAction writes fire-and-forget frames", async (t) => {
 
 	const client = new OneBotClient({ wsUrl: url, accessToken: "", log: silentLog });
 	t.after(() => teardown(client, server));
-	client.start();
+	await client.start();
 	await gotConnection;
 	await waitFor(() => client.isConnected());
 
@@ -131,6 +131,12 @@ test("sendAction writes fire-and-forget frames", async (t) => {
 	const action = await frame;
 	assert.equal(action.action, "send_private_msg");
 	assert.equal(action.params.user_id, 123);
+});
+
+test("start rejects after retries when the server is unreachable", async () => {
+	const client = new OneBotClient({ wsUrl: "ws://127.0.0.1:1", accessToken: "", log: silentLog });
+	await assert.rejects(client.start({ retries: 2, retryDelayMs: 20 }), /could not connect/);
+	client.stop();
 });
 
 test("call rejects immediately when disconnected", async () => {

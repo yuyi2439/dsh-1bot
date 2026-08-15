@@ -17,6 +17,10 @@ export interface OnebotConfig {
 	group_ids: number[];
 	/** Root for per-chat workspaces (default: `$DSH_HOME/workspaces/onebot`). */
 	workspace_root?: string;
+	/** Startup connect retries after the first attempt (default: 5). */
+	connect_retries: number;
+	/** Delay between startup connect attempts in seconds (default: 1). */
+	connect_retry_delay_secs: number;
 	reply_chunk_size: number;
 	approval_timeout_secs: number;
 	console_log: boolean;
