@@ -1,39 +1,9 @@
 # AGENTS.md
 
-Project notes for AI coding assistants. Read [README](README.md) first for the
-what and why, then follow this file when working on the code.
-
-## What this is
-
-`dsh-1bot` is a Cordis plugin / dsh profile bundle that makes OneBot 11 (QQ)
-a dsh UI surface (same standing as web/tui). Each QQ chat maps to one dsh
-agent + session; inbound messages drive agent turns and the final assistant
-text is sent back to QQ; outbound messages and tool permissions outside the
-allowlist go through in-chat approval (同意/拒绝). The logic is ported from the
-`nota-onebot` crate of the local `nota` repo (Apache-2.0).
-
-## Commands
-
-```sh
-pnpm install      # dependencies
-pnpm build        # src/*.ts → lib/*.js (the profile loads the compiled output)
-pnpm typecheck    # type-check src + test
-pnpm test         # unit tests (Node ≥ 23.6 runs .ts natively, no build needed)
-```
-
-**Always `pnpm build` after changing `src/`** — the profile links to this repo
-and otherwise keeps loading the stale `lib/`.
-
-## Releasing
-
-Tag-driven, version checked not rewritten: bump `package.json` `version`
-first (commit it), then tag with the matching version —
-`git tag v0.0.1 && git push origin main && git push --force origin v0.0.1`.
-`.github/workflows/publish.yml` fails fast when `package.json` version does
-not match the tag, runs typecheck + tests, and publishes to npm with the
-`NPM_TOKEN` repository secret (must be a bypass-2FA token). `lib/` is
-gitignored, so the workflow relies on `prepack: pnpm build` to ship a fresh
-build.
+Working notes for AI coding assistants editing this repo. The user-facing
+[README](README.md) describes what the plugin is and how to use and configure
+it — read it first. This file only holds what an agent needs that the README
+does not: code structure, the release flow, and hard rules not to break.
 
 ## Layout
 
@@ -49,6 +19,22 @@ src/
   types.ts    shared types: OnebotConfig / BridgeServices (structural service slice) / OnebotService
 test/         node:test, imports src/*.ts directly
 ```
+
+`lib/` is the compiled build output (gitignored) — **always `pnpm build` after
+changing `src/`**: the profile loads `lib/` from this linked repo and would
+otherwise keep the stale build. Build/typecheck/test commands live in the
+README's 开发 section.
+
+## Releasing
+
+Tag-driven, version checked not rewritten: bump `package.json` `version`
+first (commit it), then tag with the matching version —
+`git tag v0.0.1 && git push origin main && git push --force origin v0.0.1`.
+`.github/workflows/publish.yml` fails fast when `package.json` version does
+not match the tag, runs typecheck + tests, and publishes to npm with the
+`NPM_TOKEN` repository secret (must be a bypass-2FA token). `lib/` is
+gitignored, so the workflow relies on `prepack: pnpm build` to ship a fresh
+build.
 
 ## Hard rules (do not break)
 
