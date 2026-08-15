@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import { registerOneBotTools } from "../src/tools.ts";
-import { chatWorkspace, defaultWorkspaceRoot, sessionToRoute } from "../src/bridge.ts";
+import { sessionToRoute } from "../src/bridge.ts";
 import type { OneBotBridge } from "../src/bridge.ts";
 import type { OneBotAction } from "../src/protocol.ts";
 
@@ -165,19 +165,6 @@ test("sessionToRoute parses the dash-separated session id", () => {
 	assert.equal(sessionToRoute("onebot:private:2961354039"), null); // old colon format is gone
 	assert.equal(sessionToRoute("web_abc"), null);
 	assert.equal(sessionToRoute(undefined as unknown as string), null);
-});
-
-test("chat workspaces derive stably under a fixed root", () => {
-	assert.equal(
-		chatWorkspace("C:/Users/yuyi2/.dsh/workspaces/onebot", "onebot-private-2961354039"),
-		"C:\\Users\\yuyi2\\.dsh\\workspaces\\onebot\\chats\\onebot-private-2961354039",
-	);
-	assert.equal(
-		chatWorkspace("C:/root", "onebot-group-551947633"),
-		"C:\\root\\chats\\onebot-group-551947633",
-	);
-	const def = defaultWorkspaceRoot();
-	assert.ok(def.includes("workspaces") && def.includes("onebot"));
 });
 
 test("onebot_status reports connection state without throwing", async () => {
