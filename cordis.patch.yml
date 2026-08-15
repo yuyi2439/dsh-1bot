@@ -1,0 +1,23 @@
+# The dsh-onebot bundle patch: OneBot 11 as a UI surface, riding directly over
+# dsh-base (same service shape as web — a long-running front door — but the
+# "browser" is QQ via NapCat / LLOneBot over forward WebSocket). It mounts no
+# Host, HTTP server, Web runtime, or browser plugin.
+#
+# Runtime settings (ws_url, allowlists, prefix, …) belong in the profile's
+# user layer ($DSH_HOME/profiles/onebot/cordis.patch.yml), which outranks this
+# file. Remember: an id-targeted patch REPLACES the row's whole config, so a
+# user override must restate every field it keeps.
+
+- insert:
+    - id: onebot
+      name: 'dsh-onebot'
+      config:
+        enabled: true
+        mode: ws
+        ws_url: 'ws://127.0.0.1:3001'
+        access_token: ''
+        prefix: ''
+        friend_ids: []
+        group_ids: []
+        reply_chunk_size: 4000
+        approval_timeout_secs: 300
