@@ -9,8 +9,7 @@ dsh agent + session：消息进来驱动回合，最终回复自动发回 QQ。
 ## 快速开始
 
 ```sh
-cd <本仓库>
-dsh plugin --profile onebot add .     # 初始化 profile 并安装本包
+dsh plugin --profile onebot add dsh-onebot     # 初始化 profile 并从 npm 安装
 ```
 
 编辑 `$DSH_HOME/profiles/onebot/cordis.patch.yml`（id 定向 patch **整段替换** config，需重述所有字段）：

@@ -24,6 +24,15 @@ pnpm test         # unit tests (Node ≥ 23.6 runs .ts natively, no build needed
 **Always `pnpm build` after changing `src/`** — the profile links to this repo
 and otherwise keeps loading the stale `lib/`.
 
+## Releasing
+
+Tag-driven: `git tag v0.0.1 && git push origin v0.0.1` triggers
+`.github/workflows/publish.yml`, which rewrites `package.json` version from
+the tag, runs typecheck + tests, and publishes to npm with the `NPM_TOKEN`
+repository secret. Never bump the version in `package.json` by hand — the tag
+is the source of truth. `lib/` is gitignored, so the workflow relies on
+`prepack: pnpm build` to ship a fresh build.
+
 ## Layout
 
 ```

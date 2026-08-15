@@ -1,0 +1,54 @@
+# Publish to npm on version tags.
+#
+# Tag a release with `git tag v0.0.1 && git push origin v0.0.1` (tag format
+# `v*`). The workflow derives the package version from the tag (strips the
+# leading `v`), runs typecheck + tests, then publishes to the npm registry
+# using the NPM_TOKEN repository secret.
+#
+# Setup (one time): GitHub repo → Settings → Secrets and variables →
+# Actions → New repository secret: `NPM_TOKEN` = an npm access token with
+# publish scope (https://www.npmjs.com/settings/<user>/tokens).
+
+name: publish
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck & test
+        run: pnpm typecheck && pnpm test
+
+      - name: Publish
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json'));p.version=process.env.VERSION;fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > .npmrc
+          # --no-git-checks: the version was just rewritten from the tag, so
+          # pnpm's "tag matches version / clean tree" checks do not apply.
+          # prepack runs `pnpm build`, shipping a fresh lib/.
+          pnpm publish --no-git-checks
