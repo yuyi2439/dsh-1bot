@@ -2,7 +2,7 @@
 // consumes, and the `ctx.onebot` service surface.
 import type { AgentHandle, CreateAgentOptions, ModelSelection } from "@deepseek-ai/dsh-agent";
 import type { Session } from "@deepseek-ai/dsh-session";
-import type { OneBotClient } from "./client.ts";
+import type { OneBotClient } from "onebot.js";
 import type { ChatRoute } from "./protocol.ts";
 
 /** Plugin configuration (mirrors the schemastery `Config` in index.ts). */

@@ -9,17 +9,19 @@
 ```
 src/
   index.ts    plugin entry: name/inject/Config/apply; console log exporter; ctx.onebot service
-  client.ts   OneBotClient: forward WS, echo-correlated call(), bounded startup
-              retries (unreachable server → fatal exit), reconnect backoff
-              (terminate-style stop)
   bridge.ts   OneBotBridge: chat⇄agent, allowlist, explicit onebot_send sends, outbound chunking
   tools.ts    5 defineTool definitions (onebot_* family)
-  protocol.ts protocol types + messageToText (per-type segment rendering, default data key=value) + target parsing/action builders (dependency-free)
+  protocol.ts messageToText (per-type segment rendering, default data key=value) + target parsing + history formatting (dependency-free)
   types.ts    shared types: OnebotConfig / BridgeServices (structural service slice) / OnebotService
   hidden-sessions.ts  seeds `$DSH_HOME/sessions-hidden/README.md` (web-resume hazard)
   profile-setup.ts    seeds the profile patch with a commented config template on first setup
-test/         node:test, imports src/*.ts directly
+test/         node:test, imports src/*.ts directly (client.test.ts exercises onebot.js
+              over a local ws server; the rest use structural fakes)
 ```
+
+WS 协议层（连接/重连/echo/类型化 API/OnebotApiError）由
+[onebot.js](https://www.npmjs.com/package/onebot.js) 提供——本项目不再自带
+client 适配层，`index.ts` 用它的 `connect()` 工厂建立连接。
 
 `lib/` 是编译产物（gitignore）——**改完 `src/` 必须 `pnpm build`**：profile
 加载的是本 linked repo 的 `lib/`，不重建会一直用旧产物。
@@ -69,7 +71,7 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
    会泄漏其他插件的 info 日志到控制台；`[onebot info]` 标签来自
    `message.name`，绝不硬编码。
 8. **用 `ctx.effect(() => () => {...})` 做清理**（cordis 4 没有类型化的
-   `dispose` 事件）；清理必须同时调 `client.stop()` 和 `bridge.dispose()`，
+   `dispose` 事件）；清理必须同时调 `client.disconnect()` 和 `bridge.dispose()`，
    否则 HMR 重载会留下僵尸连接。
 9. **会话 id 格式** `onebot-private-<QQ>` / `onebot-group-<群号>`
    （`sessionToRoute` 反向解析）。分隔符故意用 `-`：`:` 会被 JSONL 后端转义成
@@ -103,8 +105,9 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
 16. **启动连不上是致命的**：`client.start()` 只在首次连接成功后 resolve；
     `connect_retries`（默认 5）次 × `connect_retry_delay_secs`（默认 1）后
     reject，`apply` 打日志给指引并 `process.exit(1)`。此路径绝不能写配置文件——
-    下面的首次运行 gate 是唯一写入者。连上之后的运行期掉线仍会永久重连
-    （退避）；只有 STARTUP 窗口有界且致命。
+    下面的首次运行 gate 是唯一写入者。重连完全由 onebot.js 的
+    `reconnection` 驱动：运行期掉线用同样的预算（次数 + 间隔）重试，耗尽后
+    **停止重连**（不再有旧的永久重连循环），恢复需重启进程。
 17. **首次运行配置 gate**：profile patch 没有 `- id: onebot` 行时，
     `seedProfilePatch` 往 `$DSH_HOME/profiles/onebot/cordis.patch.yml` APPEND
     一个全注释的配置模板，`apply` 打印如何配置并 `process.exit(1)`（在连接之前）。
@@ -148,5 +151,8 @@ QQ inbound ──► OneBotClient (forward WS) ──► Bridge.onMessageEvent
 
 - 协议层 / Bridge / 审批 / 工具：移植自 nota 项目（Rust）的 `nota-onebot`
   模块（types / client / api / bridge / config / tools）。
+- WS 协议/echo 层：[onebot.js](https://www.npmjs.com/package/onebot.js)
+  （node-napcat-ts 的改名 fork；`fetch_ptt_text` 扩展、宽松成功判定、
+  `OnebotApiError`/`invoke`/`connect` 工厂在本 fork 补充）。
 - 会话驱动（agents.create / followup / whenIdle / event folding）：参照
   `@deepseek-ai/dsh-headless` runner。

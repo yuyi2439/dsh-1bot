@@ -67,7 +67,7 @@ dsh --profile onebot
 - 入站非文本段按类型渲染（默认 `[<type> msg id:N k=v …]`，带上全部 data 和消息 id），模型用 `onebot_get_content` / `onebot_voice_text` 取内容。
 - 每聊天一个 agent/session（`onebot-private-<QQ>` / `onebot-group-<群号>`，用 `-` 分隔避免磁盘转义），JSONL 持久化、可 resume；每聊天一个独立工作区 `<workspace_root>/chats/<sessionId>`。
 - 白名单为空 = 所有消息被忽略（启动时控制台会警告）。
-- 日志形如 `[onebot info] 2026-…`；连不上 NapCat 会看到 `reconnecting` 重连循环。
+- 日志形如 `[onebot info] 2026-…`；掉线会看到 `reconnecting` 重试日志——连接断开后按 `connect_retries` 有界重试，耗尽后停止（重新可用需重启进程）。
 - **首次启动若配置里没有 onebot 配置**：自动在 `$DSH_HOME/profiles/onebot/cordis.patch.yml` 追加带注释的配置模板并提示你编辑，然后退出；编辑好再启动。
 - **启动连不上 OneBot 是致命的**：重试 `connect_retries` 次（默认 5 次 × 1 秒）后报错退出（此路径不写配置文件——唯一写配置的是首次运行的模板门），检查 `ws_url`/`access_token` 后重新启动。
 - **单实例**：第二个 dsh-1bot 进程会因锁（`<workspace_root>/.onebot.lock`）拒绝启动 —— 两个实例同时写同一会话会损坏日志。

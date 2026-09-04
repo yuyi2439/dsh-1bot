@@ -1,6 +1,8 @@
 // Tool-level tests: exercise the registered definitions through a fake
 // bridge/client, so the execute bodies (routing, validation, formatting) are
-// covered without a live OneBot connection.
+// covered without a live OneBot connection. The fake `api.invoke(method,
+// params, opts)` mirrors the onebot.js-backed client: it resolves with the
+// response DATA and throws the model-readable formatted error on failure.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Context } from "@deepseek-ai/cordis";
@@ -8,18 +10,18 @@ import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import { registerOneBotTools } from "../src/tools.ts";
 import { sessionToRoute } from "../src/bridge.ts";
 import type { OneBotBridge } from "../src/bridge.ts";
-import type { OneBotAction } from "../src/protocol.ts";
 
 const noExec = {} as ToolRunContext;
 
 /** Minimal bridge surface the tools actually touch. */
 interface FakeBridge {
-	api: { call(action: unknown): Promise<unknown>; isConnected?(): boolean };
+	api: {
+		invoke(method: unknown, params?: unknown, opts?: { hint?: string }): Promise<unknown>;
+		isConnected?(): boolean;
+	};
 	config?: { ws_url?: string };
 	isAllowedTarget?(target: string): boolean;
 	sendTarget?(target: string, text: string): void;
-	sendTargetApproved?(target: string, text: string): void;
-	requestApproval?(req: unknown): Promise<unknown>;
 }
 
 /** Register the tools against a fake ctx and return the definitions. */
@@ -31,7 +33,7 @@ function collectTools(bridge: FakeBridge): ToolDefinition[] {
 }
 
 test("registers the onebot_* tool family", () => {
-	const defs = collectTools({ api: { call: async () => ({}) } });
+	const defs = collectTools({ api: { invoke: async () => ({}) } });
 	const names = defs.map((def) => def.name).sort();
 	assert.deepEqual(names, [
 		"onebot_get_content",
@@ -43,7 +45,7 @@ test("registers the onebot_* tool family", () => {
 });
 
 test("onebot_send describes the only-delivery contract", () => {
-	const def = collectTools({ api: { call: async () => ({}) } }).find((d) => d.name === "onebot_send");
+	const def = collectTools({ api: { invoke: async () => ({}) } }).find((d) => d.name === "onebot_send");
 	assert.ok(def);
 	assert.match(def!.description, /only way to deliver any message/);
 	assert.match(def!.description, /call this tool once per part, in order/);
@@ -52,7 +54,7 @@ test("onebot_send describes the only-delivery contract", () => {
 test("onebot_send delivers immediately to an allowlisted target", async () => {
 	const sent: Array<{ target: string; text: string }> = [];
 	const bridge = {
-		api: { call: async () => ({}) },
+		api: { invoke: async () => ({}) },
 		isAllowedTarget: (target: string) => target === "private:42",
 		sendTarget: (target: string, text: string) => {
 			sent.push({ target, text });
@@ -67,7 +69,7 @@ test("onebot_send delivers immediately to an allowlisted target", async () => {
 
 test("onebot_send throws for non-allowlisted targets", async () => {
 	const bridge = {
-		api: { call: async () => ({}) },
+		api: { invoke: async () => ({}) },
 		isAllowedTarget: () => false,
 		sendTarget: () => {
 			throw new Error("must not be called");
@@ -77,13 +79,13 @@ test("onebot_send throws for non-allowlisted targets", async () => {
 	await assert.rejects(send!.execute({ target: "private:99", content: "hi" }, noExec), /not in the allowlist/);
 });
 
-test("onebot_get_msg_history routes group vs private history actions", async () => {
-	const calls: OneBotAction[] = [];
+test("onebot_get_msg_history routes group vs private history calls", async () => {
+	const calls: Array<{ method: unknown; params: any }> = [];
 	const bridge = {
 		api: {
-			call: async (action: unknown) => {
-				calls.push(action as OneBotAction);
-				return { retcode: 0, data: { messages: [] } };
+			invoke: async (method: unknown, params: any) => {
+				calls.push({ method, params });
+				return { messages: [] };
 			},
 		},
 	};
@@ -91,13 +93,13 @@ test("onebot_get_msg_history routes group vs private history actions", async () 
 	assert.ok(read);
 
 	const group = (await read!.execute({ target: "group:30003", limit: 5 }, noExec)) as { target: string };
-	assert.equal(calls[0].action, "get_group_msg_history");
+	assert.equal(calls[0].method, "get_group_msg_history");
 	assert.equal(calls[0].params.group_id, 30003);
 	assert.equal(calls[0].params.count, 5);
 	assert.equal(group.target, "group:30003");
 
 	const priv = (await read!.execute({ target: "private:42" }, noExec)) as { target: string };
-	assert.equal(calls[1].action, "get_friend_msg_history");
+	assert.equal(calls[1].method, "get_friend_msg_history");
 	assert.equal(calls[1].params.user_id, 42);
 	assert.equal(calls[1].params.count, 20);
 	assert.equal(priv.target, "private:42");
@@ -107,9 +109,9 @@ test("onebot_get_msg_history rejects invalid targets and limits without calling"
 	let called = false;
 	const bridge = {
 		api: {
-			call: async () => {
+			invoke: async () => {
 				called = true;
-				return { retcode: 0, data: { messages: [] } };
+				return { messages: [] };
 			},
 		},
 	};
@@ -123,19 +125,16 @@ test("onebot_get_msg_history rejects invalid targets and limits without calling"
 test("onebot_get_msg_history formats returned messages", async () => {
 	const bridge = {
 		api: {
-			call: async () => ({
-				retcode: 0,
-				data: {
-					messages: [
-						{
-							message_id: 1,
-							user_id: 42,
-							time: 0,
-							message: "hi",
-							sender: { user_id: 42, nickname: "A" },
-						},
-					],
-				},
+			invoke: async () => ({
+				messages: [
+					{
+						message_id: 1,
+						user_id: 42,
+						time: 0,
+						message: "hi",
+						sender: { user_id: 42, nickname: "A" },
+					},
+				],
 			}),
 		},
 	};
@@ -144,14 +143,16 @@ test("onebot_get_msg_history formats returned messages", async () => {
 	assert.ok(out.text.includes("A(42) 消息ID:1: hi"));
 });
 
-test("onebot_get_msg_history errors directly when get_friend_msg_history is unsupported", async () => {
+test("onebot_get_msg_history surfaces the client's formatted error with the hint", async () => {
 	const bridge = {
 		api: {
-			call: async () => ({
-				status: "failed",
-				retcode: 1404,
-				data: { message: "不支持该接口" },
-			}),
+			invoke: async (method: unknown, _params: unknown, opts?: { hint?: string }) => {
+				// Mirror the onebot.js-backed client: failures arrive as
+				// formatted errors, with the tool's hint appended.
+				throw new Error(
+					`${method} failed: status=failed retcode=1404, detail="不支持该接口"${opts?.hint ? ` — ${opts.hint}` : ""}`,
+				);
+			},
 		},
 	};
 	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
@@ -161,13 +162,13 @@ test("onebot_get_msg_history errors directly when get_friend_msg_history is unsu
 	);
 });
 
-test("onebot_get_msg_history accepts a response without retcode when status is ok", async () => {
+test("onebot_get_msg_history returns the no-messages notice for an empty chat", async () => {
 	let called = 0;
 	const bridge = {
 		api: {
-			call: async () => {
+			invoke: async () => {
 				called += 1;
-				return { status: "ok", data: { messages: [] } };
+				return { messages: [] };
 			},
 		},
 	};
@@ -175,16 +176,6 @@ test("onebot_get_msg_history accepts a response without retcode when status is o
 	const out = (await read!.execute({ target: "private:42" }, noExec)) as { text: string };
 	assert.equal(called, 1);
 	assert.equal(out.text, "chat private:42 has no readable recent messages");
-});
-
-test("onebot_get_msg_history stays strict when retcode is missing and status is not ok", async () => {
-	const bridge = {
-		api: {
-			call: async () => ({ data: {} }),
-		},
-	};
-	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
-	await assert.rejects(read!.execute({ target: "group:1" }, noExec), /get_group_msg_history failed/);
 });
 
 test("sessionToRoute parses the dash-separated session id", () => {
@@ -198,8 +189,8 @@ test("sessionToRoute parses the dash-separated session id", () => {
 test("onebot_status reports connection state without throwing", async () => {
 	const bridge = {
 		api: {
-			isConnected: () => false,
-			call: async () => {
+			connected: false,
+			invoke: async () => {
 				throw new Error("must not be called when disconnected");
 			},
 		},

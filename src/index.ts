@@ -1,12 +1,12 @@
 // dsh-1bot plugin entry: OneBot 11 as a dsh UI surface (profile bundle over
 // dsh-base, on par with web/tui). Mounts the WS client, the chat ⇄ agent
-// bridge, the OneBot tools (onebot_* family), and the QQ in-chat approval
-// answerer, and exposes the `ctx.onebot` service for other plugins (e.g. a
-// persona-layer plugin).
+// bridge, and the OneBot tools (onebot_* family), and exposes the
+// `ctx.onebot` service for other plugins (e.g. a persona-layer plugin).
 import type { Context, Message } from "@deepseek-ai/cordis";
 import z from "@deepseek-ai/schemastery";
 import { join } from "node:path";
-import { OneBotClient } from "./client.ts";
+import { connect, type OneBotClient } from "onebot.js";
+import type { OneBotPostEvent } from "./protocol.ts";
 import { OneBotBridge, defaultWorkspaceRoot } from "./bridge.ts";
 import { ensureHiddenSessionsDocs, hiddenSessionsRoot } from "./hidden-sessions.ts";
 import { seedProfilePatch, profilePatchPath } from "./profile-setup.ts";
@@ -54,7 +54,7 @@ export const Config: z<OnebotConfig> = z.object({
 	connect_retry_delay_secs: z.number().default(1),
 	/** Max characters per outbound QQ message (chunked above this). */
 	reply_chunk_size: z.number().default(4000),
-	/** Seconds a QQ in-chat approval waits before settling `cancelled`. */
+	/** Dormant field (QQ in-chat approval flow removed); kept for config compatibility. */
 	approval_timeout_secs: z.number().default(300),
 	/**
 	 * Print the `onebot` logger to the process console. dsh-base mounts no
@@ -145,11 +145,29 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 	// these sessions) together with its explanatory README, so anyone opening
 	// the directory understands why it exists outside the web-scanned root.
 	await ensureHiddenSessionsDocs(hiddenSessionsRoot());
-	const client = new OneBotClient({
-		wsUrl: config.ws_url,
-		accessToken: config.access_token,
-		log,
-	});
+	// onebot.js's connect(): resolves only once the connection is established
+	// (bounded retries: 1 + connect_retries, connect_retry_delay_secs apart)
+	// and throws when every attempt failed — handled below as a fatal error.
+	let client: OneBotClient;
+	try {
+		client = await connect({
+			baseUrl: config.ws_url,
+			accessToken: config.access_token,
+			log,
+			reconnection: {
+				enable: true,
+				attempts: config.connect_retries + 1,
+				delay: (config.connect_retry_delay_secs ?? 1) * 1000,
+			},
+		});
+	} catch (err) {
+		log.error?.(`${err instanceof Error ? err.message : String(err)}`);
+		log.error?.(
+			"OneBot 服务器连不上 —— 请检查 $DSH_HOME/profiles/onebot/cordis.patch.yml 中的 ws_url / access_token：" +
+				"NapCat 是否在运行、正向 WS 是否开启、地址/令牌是否正确，然后重新启动。",
+		);
+		process.exit(1);
+	}
 	const bridge = new OneBotBridge({
 		ctx,
 		config,
@@ -160,8 +178,8 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 		agentDefaultModel: ctx.get("agentDefaultModel"),
 	});
 
-	client.onMessage((event) => {
-		bridge.onMessageEvent(event).catch((err) => {
+	client.on("message", (event) => {
+		bridge.onMessageEvent(event as unknown as OneBotPostEvent).catch((err) => {
 			log.warn?.(`onebot: event handling failed: ${err instanceof Error ? err.message : String(err)}`);
 		});
 	});
@@ -171,27 +189,11 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 	// description carries the reply contract ("this is the only way to
 	// deliver any message — call it to reply in the current chat").
 	ctx.provide("onebot", bridge.publicService());
-	// Connect with bounded startup retries. An unreachable server is fatal —
-	// log clear guidance and exit — but this path NEVER touches the config
-	// file (the first-run config gate above is the only writer).
-	try {
-		await client.start({
-			retries: config.connect_retries,
-			retryDelayMs: (config.connect_retry_delay_secs ?? 1) * 1000,
-		});
-	} catch (err) {
-		log.error?.(`${err instanceof Error ? err.message : String(err)}`);
-		log.error?.(
-			"OneBot 服务器连不上 —— 请检查 $DSH_HOME/profiles/onebot/cordis.patch.yml 中的 ws_url / access_token：" +
-				"NapCat 是否在运行、正向 WS 是否开启、地址/令牌是否正确，然后重新启动。",
-		);
-		process.exit(1);
-	}
 	// Tear down on plugin unload (e.g. HMR): stop the socket loop, dispose
-	// every chat agent and pending approval, and release the singleton lock.
+	// every chat agent, and release the singleton lock.
 	ctx.effect(
 		() => async () => {
-			client.stop();
+			client.disconnect();
 			bridge.dispose();
 			await releaseLock();
 		},

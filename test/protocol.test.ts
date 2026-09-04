@@ -5,7 +5,6 @@ import assert from "node:assert/strict";
 import {
 	chunkText,
 	formatHistory,
-	getFriendMsgHistory,
 	identity,
 	messageToText,
 	parseApproval,
@@ -122,13 +121,4 @@ test("parseTarget parses private and group chat references", () => {
 	assert.equal(parseTarget("private:abc"), null);
 	assert.equal(parseTarget("group:"), null);
 	assert.equal(parseTarget(undefined), null);
-});
-
-test("getFriendMsgHistory serializes the NapCat extended action", () => {
-	const action = getFriendMsgHistory(10001, 20);
-	assert.equal(action.action, "get_friend_msg_history");
-	assert.equal(action.params.user_id, 10001);
-	assert.equal(action.params.message_seq, 0);
-	assert.equal(action.params.count, 20);
-	assert.equal(typeof action.echo, "string");
 });

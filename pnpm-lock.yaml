@@ -11,9 +11,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.2
         version: 3.18.2
-      ws:
-        specifier: ^8.18.0
-        version: 8.21.3
+      onebot.js:
+        specifier: ^0.2.0
+        version: 0.2.0
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.2
@@ -45,6 +45,9 @@ importers:
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
+      ws:
+        specifier: ^8.21.3
+        version: 8.21.3
 
 packages:
 
@@ -315,6 +318,19 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  isomorphic-ws@5.0.0:
+    resolution: {integrity: sha512-muId7Zzn9ywDsyXgTIafTry2sV3nySZeUDe6YedVd1Hvuuep5AsIlqK+XefWpYTyJG5e503F2xIuT2lcU6rCSw==}
+    peerDependencies:
+      ws: '*'
+
+  nanoid@6.0.1:
+    resolution: {integrity: sha512-3wVS3i51pE2pi1k5FFL/95BGfVS0kSsvDVuGXHOtxox/TywUmtgq+3qiTOTbs9J7KfHaXPiN171k/A6dBnaXFw==}
+    engines: {node: ^22 || ^24 || >=26}
+    hasBin: true
+
+  onebot.js@0.2.0:
+    resolution: {integrity: sha512-muEpqRYdxc8+EMkNfBgjImNuvvfehl1W9xmO251y5EWA5858XzA9qxUnkcJOl5586lvQVO0MA4Vd7LafvAOaPw==}
+
   typescript@7.0.2:
     resolution: {integrity: sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==}
     engines: {node: '>=16.20.0'}
@@ -543,6 +559,21 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
+
+  isomorphic-ws@5.0.0(ws@8.21.3):
+    dependencies:
+      ws: 8.21.3
+
+  nanoid@6.0.1: {}
+
+  onebot.js@0.2.0:
+    dependencies:
+      isomorphic-ws: 5.0.0(ws@8.21.3)
+      nanoid: 6.0.1
+      ws: 8.21.3
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   typescript@7.0.2:
     optionalDependencies:

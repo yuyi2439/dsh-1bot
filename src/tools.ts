@@ -5,41 +5,15 @@
 import type { Context } from "@deepseek-ai/cordis";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import type { OneBotBridge } from "./bridge.ts";
-import type { GetMsgData, LoginInfoData, MsgHistoryData, OneBotResponse, PttTextData } from "./protocol.ts";
-import {
-	fetchPttText,
-	formatHistory,
-	getFriendMsgHistory,
-	getGroupMsgHistory,
-	getLoginInfo,
-	getMsg,
-	identity,
-	messageToText,
-	parseMessageId,
-	parseTarget,
-} from "./protocol.ts";
+import type { GetMsgData, LoginInfoData, MsgHistoryData, PttTextData } from "./protocol.ts";
+import { formatHistory, identity, messageToText, parseMessageId, parseTarget } from "./protocol.ts";
 
 /**
- * Throw a model-facing error when the implementation did not answer `ok`.
- * Success is `retcode === 0`; an absent `retcode` is accepted only when the
- * implementation still reports `status: "ok"`. Any other answer — including
- * an unsupported/extended action the implementation refuses — throws with
- * the action name, the raw status/retcode, and any `data` error detail, so
- * the agent sees a direct error instead of a silent empty result.
+ * Compatibility hint for the NapCat/go-cqhttp extended friend-history API.
+ * The client's `call` appends this to any `get_friend_msg_history` failure,
+ * so an implementation that refuses the extension surfaces a direct error
+ * instead of a silent empty result.
  */
-function assertOk(resp: OneBotResponse, action: string, hint?: string): void {
-	const ok = resp.retcode === 0 || (resp.retcode == null && resp.status === "ok");
-	if (ok) return;
-	const data = resp.data as { message?: unknown; error?: unknown } | undefined;
-	const detail = data && (data.message || data.error)
-		? `, detail=${JSON.stringify(data.message ?? data.error)}`
-		: "";
-	throw new Error(
-		`${action} failed: status=${resp.status} retcode=${resp.retcode}${detail}${hint ? ` — ${hint}` : ""}`,
-	);
-}
-
-/** Compatibility hint for the NapCat/go-cqhttp extended friend-history API. */
 const FRIEND_HISTORY_HINT =
 	"get_friend_msg_history is a NapCat/go-cqhttp extension; this OneBot implementation may not " +
 	"support reading private chat history — for a single message use onebot_get_content instead";
@@ -48,7 +22,7 @@ const FRIEND_HISTORY_HINT =
  * Register every OneBot tool on `ctx.tools`.
  * @param ctx - the plugin context (tool registration is global here).
  * @param bridge - the active {@link OneBotBridge}; tools reach the protocol
- *   through `bridge.api` and outbound/approval through the bridge methods.
+ *   through `bridge.api` and outbound sending through the bridge methods.
  */
 export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 	ctx.tools.register(
@@ -129,13 +103,14 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 				if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
 					throw new Error("limit must be an integer between 1 and 100");
 				}
-				const action =
+				const data = (await bridge.api.invoke(
+					route.kind === "group" ? "get_group_msg_history" : "get_friend_msg_history",
 					route.kind === "group"
-						? getGroupMsgHistory(route.group_id, limit)
-						: getFriendMsgHistory(route.user_id, limit);
-				const resp = await bridge.api.call(action);
-				assertOk(resp, action.action, route.kind === "private" ? FRIEND_HISTORY_HINT : undefined);
-				const messages = (resp.data as MsgHistoryData | undefined)?.messages ?? [];
+						? { group_id: route.group_id, message_seq: 0, count: limit }
+						: { user_id: route.user_id, message_seq: 0, count: limit },
+					{ hint: route.kind === "private" ? FRIEND_HISTORY_HINT : undefined },
+				)) as unknown as MsgHistoryData;
+				const messages = data?.messages ?? [];
 				const text = formatHistory(messages);
 				return {
 					target,
@@ -175,23 +150,21 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 			async execute(args) {
 				const id = parseMessageId(args.message_id);
 				if (!id) throw new Error("message_id must be a non-empty string or number");
-				const resp = await bridge.api.call(getMsg(id));
-				assertOk(resp, "get_msg");
-				const data = (resp.data as GetMsgData | undefined) ?? {};
-				const messageId = String(data.message_id ?? id);
-				const text = data.message != null ? messageToText(data.message, messageId) : "";
-				const userId = Number(data.user_id) || 0;
-				const time = Number(data.time) || 0;
+				const data = (await bridge.api.invoke("get_msg", { message_id: id })) as unknown as GetMsgData;
+				const messageId = String(data?.message_id ?? id);
+				const text = data?.message != null ? messageToText(data.message, messageId) : "";
+				const userId = Number(data?.user_id) || 0;
+				const time = Number(data?.time) || 0;
 				const ts = time
 					? new Date(time * 1000).toLocaleString("zh-CN", { hour12: false })
 					: "--";
 				return {
 					message_id: messageId,
-					message_type: data.message_type ?? "unknown",
+					message_type: data?.message_type ?? "unknown",
 					time,
 					user_id: userId,
-					sender: identity(data.sender, userId),
-					text: `消息 ${messageId}（${data.message_type ?? "unknown"}，${ts}）${identity(data.sender, userId)}: ${text}`,
+					sender: identity(data?.sender, userId),
+					text: `消息 ${messageId}（${data?.message_type ?? "unknown"}，${ts}）${identity(data?.sender, userId)}: ${text}`,
 				};
 			},
 		}),
@@ -222,17 +195,14 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 				],
 			},
 			async execute() {
-				const connected = bridge.api.isConnected();
+				const connected = bridge.api.connected;
 				let user_id = 0;
 				let nickname = "";
 				if (connected) {
 					try {
-						const resp = await bridge.api.call(getLoginInfo());
-						if (resp.retcode === 0) {
-							const data = (resp.data as LoginInfoData | undefined) ?? {};
-							user_id = Number(data.user_id) || 0;
-							nickname = data.nickname ?? "";
-						}
+						const data = (await bridge.api.invoke("get_login_info", {})) as unknown as LoginInfoData;
+						user_id = Number(data?.user_id) || 0;
+						nickname = data?.nickname ?? "";
 					} catch {
 						// Not connected in the meantime; report the state as-is.
 					}
@@ -278,9 +248,8 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 				for (let attempt = 0; attempt < 3; attempt++) {
 					if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
 					try {
-						const resp = await bridge.api.call(fetchPttText(id));
-						assertOk(resp, "fetch_ptt_text");
-						const text = ((resp.data as PttTextData | undefined)?.text ?? "").trim();
+						const data = (await bridge.api.invoke("fetch_ptt_text", { message_id: id })) as unknown as PttTextData;
+						const text = (data?.text ?? "").trim();
 						return {
 							message_id: id,
 							text: text ? `语音 ${id} 转文字: ${text}` : `语音 ${id} 没有可转写的文字内容`,

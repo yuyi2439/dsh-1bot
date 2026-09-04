@@ -13,18 +13,9 @@ import type { AgentHandle } from "@deepseek-ai/dsh-agent";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import type { OneBotLog } from "./client.ts";
-import { OneBotClient } from "./client.ts";
+import { type OneBotClient, type OneBotLog } from "onebot.js";
 import type { ChatRoute, OneBotMessageEvent, OneBotPostEvent } from "./protocol.ts";
-import {
-	chunkText,
-	identity,
-	isMessageEvent,
-	messageToText,
-	parseTarget,
-	sendGroupMsg,
-	sendPrivateMsg,
-} from "./protocol.ts";
+import { chunkText, identity, isMessageEvent, messageToText, parseTarget } from "./protocol.ts";
 import type { BridgeServices, OnebotConfig, OnebotService } from "./types.ts";
 
 /** Default max characters per outbound QQ message. */
@@ -262,11 +253,21 @@ export class OneBotBridge {
 		const target = route.kind === "private" ? `private:${route.user_id}` : `group:${route.group_id}`;
 		this.log.info?.(`send to ${target}: ${text.slice(0, 200)}`);
 		for (const chunk of chunkText(text, maxChars)) {
-			const action =
-				route.kind === "private"
-					? sendPrivateMsg(route.user_id, chunk)
-					: sendGroupMsg(route.group_id, chunk);
-			this.client.sendAction(action);
+			if (route.kind === "private") {
+				this.client
+					.send("send_private_msg", {
+						user_id: route.user_id,
+						message: [{ type: "text", data: { text: chunk } }],
+					})
+					.catch((err) => this.log.warn?.(`onebot: ${err instanceof Error ? err.message : String(err)}`));
+			} else {
+				this.client
+					.send("send_group_msg", {
+						group_id: route.group_id,
+						message: [{ type: "text", data: { text: chunk } }],
+					})
+					.catch((err) => this.log.warn?.(`onebot: ${err instanceof Error ? err.message : String(err)}`));
+			}
 		}
 	}
 

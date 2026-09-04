@@ -1,7 +1,6 @@
 // OneBot 11 wire helpers and types (ported from the nota project's Rust
-// OneBot types). Dependency-free module: safe to unit-test
-// without any @deepseek-ai package.
-import { randomUUID } from "node:crypto";
+// OneBot types; the wire/echo layer itself now lives in onebot.js).
+// Dependency-free module: safe to unit-test without any @deepseek-ai package.
 
 /** One message segment as delivered by the implementation. */
 export interface OneBotSegment {
@@ -43,21 +42,6 @@ export interface OneBotMessageEvent {
 /** Narrow an arbitrary post event to a message event. */
 export function isMessageEvent(event: OneBotPostEvent): event is OneBotMessageEvent {
 	return event.post_type === "message";
-}
-
-/** One outgoing action with its correlation echo. */
-export interface OneBotAction {
-	action: string;
-	params: Record<string, unknown>;
-	echo: string;
-}
-
-/** The implementation's response to one action, matched by `echo`. */
-export interface OneBotResponse {
-	status?: string;
-	retcode?: number;
-	echo?: string;
-	data?: unknown;
 }
 
 /** A message as returned by the history APIs (get_*_msg_history). */
@@ -237,68 +221,5 @@ export function parseTarget(target: string | null | undefined): ChatRoute | null
 }
 
 // ── action builders ─────────────────────────────────────────────────────────
-// Each action carries a fresh `echo` that the implementation echoes back on
-// its response; the client correlates by it.
-
-/** `send_private_msg` action. */
-export function sendPrivateMsg(userId: number, text: string): OneBotAction {
-	return {
-		action: "send_private_msg",
-		params: { user_id: userId, message: [{ type: "text", data: { text } }] },
-		echo: randomUUID(),
-	};
-}
-
-/** `send_group_msg` action. */
-export function sendGroupMsg(groupId: number, text: string): OneBotAction {
-	return {
-		action: "send_group_msg",
-		params: { group_id: groupId, message: [{ type: "text", data: { text } }] },
-		echo: randomUUID(),
-	};
-}
-
-/** NapCat / go-cqhttp extended `get_group_msg_history` action. */
-export function getGroupMsgHistory(groupId: number, count: number): OneBotAction {
-	return {
-		action: "get_group_msg_history",
-		params: { group_id: groupId, message_seq: 0, count },
-		echo: randomUUID(),
-	};
-}
-
-/** NapCat / go-cqhttp extended `get_friend_msg_history` action. */
-export function getFriendMsgHistory(userId: number, count: number): OneBotAction {
-	return {
-		action: "get_friend_msg_history",
-		params: { user_id: userId, message_seq: 0, count },
-		echo: randomUUID(),
-	};
-}
-
-/** Standard `get_login_info` action. */
-export function getLoginInfo(): OneBotAction {
-	return {
-		action: "get_login_info",
-		params: {},
-		echo: randomUUID(),
-	};
-}
-
-/** Standard `get_msg` action. */
-export function getMsg(messageId: string | number): OneBotAction {
-	return {
-		action: "get_msg",
-		params: { message_id: messageId },
-		echo: randomUUID(),
-	};
-}
-
-/** NapCat extended `fetch_ptt_text` action (voice-to-text). */
-export function fetchPttText(messageId: string | number): OneBotAction {
-	return {
-		action: "fetch_ptt_text",
-		params: { message_id: String(messageId) },
-		echo: randomUUID(),
-	};
-}
+// Outbound actions are typed directly by onebot.js (`WSSendParam`); see
+// bridge.sendReply and the tools for the call sites.
