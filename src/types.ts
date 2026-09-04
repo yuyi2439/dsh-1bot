@@ -2,7 +2,6 @@
 // consumes, and the `ctx.onebot` service surface.
 import type { AgentHandle, CreateAgentOptions, ModelSelection } from "@deepseek-ai/dsh-agent";
 import type { Session } from "@deepseek-ai/dsh-session";
-import type { ApprovalOutcome, ApprovalRequest } from "@deepseek-ai/dsh-user-approval";
 import type { OneBotClient } from "./client.ts";
 import type { ChatRoute } from "./protocol.ts";
 
@@ -31,14 +30,12 @@ export interface BridgeServices {
 	agents: { create(options: CreateAgentOptions): Promise<AgentHandle> };
 	sessions: { flush(session: Session): Promise<boolean> };
 	agentDefaultModel?: { currentSelection(): ModelSelection };
-	approval?: { request(req: ApprovalRequest): Promise<ApprovalOutcome> };
 }
 
-/** The `ctx.onebot` service surface exposed for other plugins (e.g. dsh-nota). */
+/** The `ctx.onebot` service surface exposed for other plugins (e.g. a persona-layer plugin). */
 export interface OnebotService {
 	client: OneBotClient;
 	isAllowedTarget(target: string): boolean;
 	send(target: string, text: string): void;
-	sendApproved(target: string, text: string): void;
 	sendReply(route: ChatRoute, text: string): void;
 }

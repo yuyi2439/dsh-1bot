@@ -2,9 +2,11 @@
 
 把 OneBot 11（QQ，NapCat / LLOneBot / Lagrange）变成 dsh 的一个 UI 表面 —— 与 web / tui
 平级的 profile bundle，骑在 `@deepseek-ai/dsh-base` 之上。每个 QQ 聊天（私聊/群）对应一个
-dsh agent + session：消息进来驱动回合，最终回复自动发回 QQ。
+dsh agent + session：消息进来驱动回合；自动发送已移除——模型要说话必须显式
+调用 `onebot_send`（每次调用立即发送），因为回合末自动投递会与模型主动发送
+重复（双重回答）。
 
-逻辑移植自本地 nota 项目的 `nota-onebot` crate（Apache-2.0）。
+逻辑移植自 nota 项目（Rust）的 OneBot 桥接实现，Apache-2.0。
 
 ## 快速开始
 
@@ -50,35 +52,33 @@ dsh --profile onebot
 | `connect_retries` | `5` | 启动连接失败后的重试次数（每次间隔 `connect_retry_delay_secs`） |
 | `connect_retry_delay_secs` | `1` | 启动连接重试间隔（秒） |
 | `reply_chunk_size` | `4000` | 出站消息分块上限 |
-| `approval_timeout_secs` | `300` | QQ 内审批超时（秒） |
+| `approval_timeout_secs` | `300` | 审批超时（秒）；QQ 内审批流已移除，字段休眠保留 |
 | `console_log` | `true` | 把 onebot 日志打到控制台 |
 
 ## 工具
 
-`onebot_send`、`onebot_get_msg_history`（群/私聊历史）、`onebot_get_content`、`onebot_status`（含连接状态）、
+`onebot_send`（唯一发送途径，即时发送，可多段：先回复、查资料、再回复）、`onebot_get_msg_history`（群/私聊历史）、`onebot_get_content`、`onebot_status`（含连接状态）、
 `onebot_voice_text`。统一 `onebot_` 前缀（`send_message` 是子 agent 控制的保留名）。
-**当前聊天的回复会自动发回，模型不需要也不应该对当前聊天调用 `onebot_send`**（工具描述里已声明；本插件不注入 prompt，那属于 persona 层）。
-非白名单出站走 QQ 内审批：聊天里回复「同意」/「拒绝」（可带序号）裁决，超时/断连 fail-closed。
+**自动发送已移除**：所有出站消息都由模型显式调用 `onebot_send` 发送；prompt/persona 注入不在本插件内（纯 adapter，由独立的 persona 层插件负责）。
+非白名单目标的 `onebot_send` 直接报错——QQ 内审批流已移除，白名单外一律直接拒绝。
 
 ## 行为要点
 
-- 入站非文本段渲染为 `[image msg id:N]` 占位符，模型用 `onebot_get_content` / `onebot_voice_text` 取内容。
+- 入站非文本段按类型渲染（默认 `[<type> msg id:N k=v …]`，带上全部 data 和消息 id），模型用 `onebot_get_content` / `onebot_voice_text` 取内容。
 - 每聊天一个 agent/session（`onebot-private-<QQ>` / `onebot-group-<群号>`，用 `-` 分隔避免磁盘转义），JSONL 持久化、可 resume；每聊天一个独立工作区 `<workspace_root>/chats/<sessionId>`。
 - 白名单为空 = 所有消息被忽略（启动时控制台会警告）。
 - 日志形如 `[onebot info] 2026-…`；连不上 NapCat 会看到 `reconnecting` 重连循环。
-- **启动连不上 OneBot 是致命的**：重试 `connect_retries` 次（默认 5 次 × 1 秒）后报错退出，并提示检查 `ws_url`/`access_token` 配置。
+- **首次启动若配置里没有 onebot 配置**：自动在 `$DSH_HOME/profiles/onebot/cordis.patch.yml` 追加带注释的配置模板并提示你编辑，然后退出；编辑好再启动。
+- **启动连不上 OneBot 是致命的**：重试 `connect_retries` 次（默认 5 次 × 1 秒）后报错退出（此路径不写配置文件——唯一写配置的是首次运行的模板门），检查 `ws_url`/`access_token` 后重新启动。
 - **单实例**：第二个 dsh-1bot 进程会因锁（`<workspace_root>/.onebot.lock`）拒绝启动 —— 两个实例同时写同一会话会损坏日志。
 - **会话与 web 隔离**：onebot 会话持久化在 `$DSH_HOME/sessions-hidden`（非 `sessions/`）。web UI 打开它可见的会话会 resume 成第二个写入者导致日志损坏，隔离后 web 看不到也碰不到；监视请用 onebot 进程控制台日志。
 
-## 开发
+## 开发与贡献
 
-```sh
-pnpm install      # 依赖（typescript / @types/node / @types/ws）
-pnpm build        # src/*.ts → lib/*.js（profile 加载编译产物，改源码后必跑）
-pnpm typecheck    # src + test 类型检查
-pnpm test         # 23 个单测（Node ≥23.6 原生跑 .ts）
-```
+开发者/贡献者请看 [CONTRIBUTING.md](CONTRIBUTING.md)：仓库结构、构建/测试命令、
+发布流程、硬性规范（含改工具/模型后常见的 `session … (id collision)` 报错与处理）、
+事件流与移植来源。
 
 ## License
 
-Apache-2.0（移植自 nota）。
+Apache-2.0（逻辑移植自 nota 项目）。

@@ -1,5 +1,5 @@
 // Client round-trip tests against a local `ws` server (ported from the
-// nota-onebot client.rs ws_roundtrip test).
+// nota-onebot ws_roundtrip test).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocketServer, type WebSocket } from "ws";

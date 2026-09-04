@@ -42,6 +42,41 @@ test("registers the onebot_* tool family", () => {
 	]);
 });
 
+test("onebot_send describes the only-delivery contract", () => {
+	const def = collectTools({ api: { call: async () => ({}) } }).find((d) => d.name === "onebot_send");
+	assert.ok(def);
+	assert.match(def!.description, /only way to deliver any message/);
+	assert.match(def!.description, /call this tool once per part, in order/);
+});
+
+test("onebot_send delivers immediately to an allowlisted target", async () => {
+	const sent: Array<{ target: string; text: string }> = [];
+	const bridge = {
+		api: { call: async () => ({}) },
+		isAllowedTarget: (target: string) => target === "private:42",
+		sendTarget: (target: string, text: string) => {
+			sent.push({ target, text });
+		},
+	};
+	const send = collectTools(bridge).find((def) => def.name === "onebot_send");
+	assert.ok(send);
+	const out = (await send!.execute({ target: "private:42", content: "hello" }, noExec)) as { delivered: boolean };
+	assert.equal(out.delivered, true);
+	assert.deepEqual(sent, [{ target: "private:42", text: "hello" }]);
+});
+
+test("onebot_send throws for non-allowlisted targets", async () => {
+	const bridge = {
+		api: { call: async () => ({}) },
+		isAllowedTarget: () => false,
+		sendTarget: () => {
+			throw new Error("must not be called");
+		},
+	};
+	const send = collectTools(bridge).find((def) => def.name === "onebot_send");
+	await assert.rejects(send!.execute({ target: "private:99", content: "hi" }, noExec), /not in the allowlist/);
+});
+
 test("onebot_get_msg_history routes group vs private history actions", async () => {
 	const calls: OneBotAction[] = [];
 	const bridge = {
@@ -150,13 +185,6 @@ test("onebot_get_msg_history stays strict when retcode is missing and status is 
 	};
 	const read = collectTools(bridge).find((def) => def.name === "onebot_get_msg_history");
 	await assert.rejects(read!.execute({ target: "group:1" }, noExec), /get_group_msg_history failed/);
-});
-
-test("onebot_send describes the auto-reply contract", () => {
-	const def = collectTools({ api: { call: async () => ({}) } }).find((d) => d.name === "onebot_send");
-	assert.ok(def);
-	assert.match(def!.description, /delivered automatically/);
-	assert.match(def!.description, /do not use this tool to reply there/);
 });
 
 test("sessionToRoute parses the dash-separated session id", () => {

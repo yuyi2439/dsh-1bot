@@ -1,5 +1,5 @@
-// Forward WebSocket client for OneBot 11 (ported from nota-onebot
-// crates/nota-onebot/src/client.rs + api.rs). The bot connects to the OneBot
+// Forward WebSocket client for OneBot 11 (ported from the nota project's
+// Rust OneBot client + api). The bot connects to the OneBot
 // implementation's WS server (NapCat / LLOneBot / Lagrange), receives
 // `post_type` events, and sends action requests over the same connection.
 // Reconnects with exponential backoff; the backoff resets after a connection
@@ -84,16 +84,17 @@ export class OneBotClient {
 					reject(new Error("onebot: client stopped during startup"));
 					return;
 				}
-				this.connectOnce().then((ok) => {
+				this.connectOnce().then(({ ok, error }) => {
 					if (ok) {
 						resolve();
 						return;
 					}
+					const reason = error ?? "connection error";
 					if (left <= 0) {
-						reject(new Error(`onebot: could not connect to ${this.wsUrl} after ${retries + 1} attempts`));
+						reject(new Error(`onebot: could not connect to ${this.wsUrl} after ${retries + 1} attempts (${reason})`));
 						return;
 					}
-					this.log.warn?.(`onebot: connection attempt failed; retrying in ${retryDelayMs}ms (${left} left)`);
+					this.log.warn?.(`onebot: connection attempt failed (${reason}); retrying in ${retryDelayMs}ms (${left} left)`);
 					setTimeout(() => attempt(left - 1), retryDelayMs);
 				});
 			};
@@ -118,13 +119,14 @@ export class OneBotClient {
 	}
 
 	/**
-	 * Open one connection and wire all handlers. Resolves `true` when the
-	 * socket opens; `false` when it errors/closes before opening, or when the
-	 * open takes longer than {@link CONNECT_TIMEOUT_MS}. Once opened, the
-	 * close handler schedules the forever-reconnect loop, so runtime drops
-	 * reconnect automatically.
+	 * Open one connection and wire all handlers. Resolves `{ ok: true }` when
+	 * the socket opens; `{ ok: false, error }` when it errors/closes before
+	 * opening (the error reason) or when the open takes longer than
+	 * {@link CONNECT_TIMEOUT_MS} (`error: "connection timed out"`). Once
+	 * opened, the close handler schedules the forever-reconnect loop, so
+	 * runtime drops reconnect automatically.
 	 */
-	private connectOnce(): Promise<boolean> {
+	private connectOnce(): Promise<{ ok: boolean; error?: string }> {
 		return new Promise((resolve) => {
 			const startedAt = Date.now();
 			const ws = new WebSocket(
@@ -136,19 +138,19 @@ export class OneBotClient {
 			this.socket = ws;
 			let opened = false;
 			let settled = false;
-			const finish = (ok: boolean): void => {
+			let lastError: string | undefined;
+			const finish = (ok: boolean, error?: string): void => {
 				if (settled) return;
 				settled = true;
-				resolve(ok);
+				resolve({ ok, error });
 			};
 			const timer = setTimeout(() => {
-				this.log.warn?.(`onebot: connection to ${this.wsUrl} timed out`);
 				try {
 					ws.terminate();
 				} catch {
 					// ignore
 				}
-				finish(false);
+				finish(false, "connection timed out");
 			}, CONNECT_TIMEOUT_MS);
 
 			ws.on("open", () => {
@@ -161,14 +163,15 @@ export class OneBotClient {
 				this.handleMessage(String(data));
 			});
 			ws.on("error", (err) => {
-				this.log.warn?.(`onebot: websocket error: ${err.message}`);
+				lastError = err.message;
+				this.log.debug?.(`onebot: websocket error: ${err.message}`);
 			});
 			ws.on("close", () => {
 				this.socket = null;
 				this.failPending(new Error("onebot: connection closed"));
 				if (!opened) {
 					clearTimeout(timer);
-					finish(false);
+					finish(false, lastError ?? "connection closed");
 					return;
 				}
 				// Was connected: schedule the forever-reconnect loop with backoff.

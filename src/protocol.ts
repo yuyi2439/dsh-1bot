@@ -1,5 +1,5 @@
-// OneBot 11 wire helpers and types (ported from nota-onebot
-// crates/nota-onebot/src/types.rs). Dependency-free module: safe to unit-test
+// OneBot 11 wire helpers and types (ported from the nota project's Rust
+// OneBot types). Dependency-free module: safe to unit-test
 // without any @deepseek-ai package.
 import { randomUUID } from "node:crypto";
 
@@ -102,44 +102,44 @@ export type ChatRoute =
 	| { kind: "private"; user_id: number }
 	| { kind: "group"; group_id: number };
 
-/** An approve/deny command parsed from chat text. */
+/** An approve/deny command parsed from chat text (approval flow, dormant). */
 export interface ApprovalCommand {
 	approved: boolean;
 	seq: number | null;
 }
 
 /**
- * Flatten a message body to plain text. Non-text segments become `[<type>]`
- * placeholders without a message id (used for local parsing, e.g. approval
- * commands).
+ * Per-segment-type text renderers. `text` keeps its content; every other
+ * type falls back to the default renderer, which dumps ALL of the segment's
+ * `data` as `key=value` pairs (plus the containing message id when given, so
+ * the model can fetch content with `onebot_get_content`). Add more entries
+ * here for types that need a custom shape.
  */
-export function toText(message: OneBotMessage | undefined | null): string {
-	if (typeof message === "string") return message;
-	if (!Array.isArray(message)) return "";
-	return message.map(segmentToText).join("");
+const SEGMENT_RENDERERS: Record<string, (segment: OneBotSegment, messageId?: string) => string> = {
+	text: (segment) => String(segment.data?.text ?? ""),
+};
+
+function renderSegment(segment: OneBotSegment | undefined, messageId?: string): string {
+	if (!segment?.type) return "";
+	const render = SEGMENT_RENDERERS[segment.type];
+	if (render) return render(segment, messageId);
+	const id = messageId ? ` msg id:${messageId}` : "";
+	const kv = Object.entries(segment.data ?? {})
+		.map(([key, value]) => ` ${key}=${String(value)}`)
+		.join("");
+	return `[${segment.type}${id}${kv}]`;
 }
 
 /**
- * Flatten a message body to plain text for the LLM. Text segments keep their
- * content; every other segment is rendered uniformly as
- * `[<type> msg id:<messageId>]` so the persona knows what kind of media
- * arrived and can fetch its content with a tool (`onebot_get_msg`,
- * `onebot_voice_text`, …).
+ * Render a message body (string or segment array) to plain text for the LLM
+ * with ONE function: text segments keep their content, every other segment
+ * renders per its type (default: all `data` fields as `key=value`, plus the
+ * containing message id when provided).
  */
-export function toTextWithId(message: OneBotMessage | undefined | null, messageId: string): string {
+export function messageToText(message: OneBotMessage | undefined | null, messageId?: string): string {
 	if (typeof message === "string") return message;
 	if (!Array.isArray(message)) return "";
-	return message.map((segment) => segmentToTextWithId(segment, messageId)).join("");
-}
-
-function segmentToText(segment: OneBotSegment | undefined): string {
-	if (segment?.type === "text") return String(segment?.data?.text ?? "");
-	return `[${segment?.type ?? "unknown"}]`;
-}
-
-function segmentToTextWithId(segment: OneBotSegment | undefined, messageId: string): string {
-	if (segment?.type === "text") return String(segment?.data?.text ?? "");
-	return `[${segment?.type ?? "unknown"} msg id:${messageId}]`;
+	return message.map((segment) => renderSegment(segment, messageId)).join("");
 }
 
 /**
@@ -200,7 +200,7 @@ export function parseApproval(text: string | undefined | null): ApprovalCommand 
 export function formatHistory(messages: readonly HistoryMessage[] | undefined): string {
 	const out: string[] = [];
 	for (const msg of messages ?? []) {
-		const text = msg?.message != null ? toTextWithId(msg.message, parseMessageId(msg.message_id)) : "";
+		const text = msg?.message != null ? messageToText(msg.message, parseMessageId(msg.message_id)) : "";
 		if (!text.trim()) continue;
 		const who = identity(msg.sender, msg.user_id);
 		const time = new Date((msg.time ?? 0) * 1000);

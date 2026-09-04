@@ -1,5 +1,5 @@
 // Unit tests for the dependency-free protocol helpers (ported from the
-// nota-onebot types.rs test suite).
+// nota-onebot types test suite).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -7,51 +7,43 @@ import {
 	formatHistory,
 	getFriendMsgHistory,
 	identity,
+	messageToText,
 	parseApproval,
 	parseMessageId,
 	parseTarget,
-	toText,
-	toTextWithId,
 } from "../src/protocol.ts";
 
-test("toText flattens segment arrays with placeholders", () => {
+test("messageToText keeps text segments and passes plain strings through", () => {
+	assert.equal(messageToText("@someone 你好"), "@someone 你好");
 	const message = [
 		{ type: "text", data: { text: "hello " } },
-		{ type: "face", data: { id: "1" } },
-		{ type: "text", data: { text: " world" } },
+		{ type: "text", data: { text: "world" } },
 	];
-	assert.equal(toText(message), "hello [face] world");
+	assert.equal(messageToText(message), "hello world");
 });
 
-test("toText passes plain strings through", () => {
-	assert.equal(toText("@someone 你好"), "@someone 你好");
+test("messageToText default renders all data as key=value with the message id", () => {
+	const image = [{ type: "image", data: { file: "a.png", url: "https://x" } }];
+	assert.equal(messageToText(image, "77"), "[image msg id:77 file=a.png url=https://x]");
+	assert.equal(messageToText(image), "[image file=a.png url=https://x]");
 });
 
-test("toTextWithId renders non-text segments with the message id", () => {
-	const voice = [{ type: "record", data: { file: "voice.amr" } }];
-	assert.equal(toTextWithId(voice, "99"), "[record msg id:99]");
+test("messageToText renders every non-text segment type via the default renderer", () => {
+	const message = [
+		{ type: "face", data: { id: 1 } },
+		{ type: "at", data: { qq: "10001" } },
+		{ type: "some_future_type", data: { a: "1", b: 2 } },
+	];
+	assert.equal(messageToText(message, "77"), "[face msg id:77 id=1][at msg id:77 qq=10001][some_future_type msg id:77 a=1 b=2]");
+	assert.equal(messageToText(message), "[face id=1][at qq=10001][some_future_type a=1 b=2]");
+});
 
+test("messageToText handles mixed text and media segments", () => {
 	const mixed = [
 		{ type: "text", data: { text: "收到 " } },
-		{ type: "record", data: {} },
+		{ type: "record", data: { file: "voice.amr" } },
 	];
-	assert.equal(toTextWithId(mixed, "42"), "收到 [record msg id:42]");
-});
-
-test("toTextWithId renders every non-text segment type uniformly", () => {
-	const message = [
-		{ type: "image", data: {} },
-		{ type: "face", data: { id: 1 } },
-		{ type: "video", data: {} },
-		{ type: "at", data: { qq: "10001" } },
-		{ type: "forward", data: {} },
-		{ type: "some_future_type", data: {} },
-	];
-	assert.equal(
-		toTextWithId(message, "77"),
-		"[image msg id:77][face msg id:77][video msg id:77][at msg id:77][forward msg id:77][some_future_type msg id:77]",
-	);
-	assert.equal(toText(message), "[image][face][video][at][forward][some_future_type]");
+	assert.equal(messageToText(mixed, "42"), "收到 [record msg id:42 file=voice.amr]");
 });
 
 test("identity prefers card over nickname, falls back to the QQ number", () => {

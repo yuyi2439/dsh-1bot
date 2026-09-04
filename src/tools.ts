@@ -1,4 +1,4 @@
-// OneBot-facing tools (ported from nota-onebot crates/nota-onebot/src/tools.rs).
+// OneBot-facing tools (ported from the nota project's Rust OneBot tools).
 // All tool names carry the `onebot_` prefix: `send_message` is a reserved
 // global name in the dsh ecosystem (subagent control), and a scoped prefix
 // keeps the whole family collision-free.
@@ -14,9 +14,9 @@ import {
 	getLoginInfo,
 	getMsg,
 	identity,
+	messageToText,
 	parseMessageId,
 	parseTarget,
-	toTextWithId,
 } from "./protocol.ts";
 
 /**
@@ -55,12 +55,12 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 		defineTool({
 			name: "onebot_send",
 			description:
-				"Send a message to a QQ conversation session. target is private:<QQ> or group:<群号>; the target must be allowlisted or explicitly approved by the user. IMPORTANT: your reply to the chat you are CURRENTLY talking in is delivered automatically at the end of the turn — do not use this tool to reply there, only to message OTHER chats.",
+				"Send a message to a QQ conversation session. target is private:<QQ> or group:<群号>; the target must be allowlisted. THIS is the only way to deliver any message, including your reply to the chat you are CURRENTLY talking in — each call sends immediately (no batching, no auto-send at turn end). To reply in multiple parts, call this tool once per part, in order; you may also answer first, look something up, then answer again.",
 			parameters: {
 				target: {
 					type: "string",
 					required: true,
-					description: "Target session, e.g. private:2961354039 or group:551947633",
+					description: "Target session, e.g. private:2961354039 or group:551947633 (use the current chat's id to reply)",
 				},
 				content: {
 					type: "string",
@@ -75,43 +75,21 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 					properties: {
 						delivered: { type: "boolean", required: true },
 						target: { type: "string", required: true },
-						denied_reason: { type: "string" },
 					},
 				},
-				render: (_args, value) => [
-					{
-						type: "text",
-						text: value.delivered
-							? `已发送到 ${value.target}`
-							: `发送被拒绝：${value.denied_reason ?? "未知原因"}`,
-					},
-				],
+				render: (_args, value) => [{ type: "text", text: `已发送到 ${value.target}` }],
 			},
-			async execute(args, exec) {
+			async execute(args) {
 				const target = String(args.target);
 				const content = String(args.content);
 				if (!target || !content.trim()) {
 					throw new Error("target and content must be non-empty strings");
 				}
-				if (bridge.isAllowedTarget(target)) {
-					bridge.sendTarget(target, content);
-					return { delivered: true, target };
+				if (!bridge.isAllowedTarget(target)) {
+					throw new Error(`target ${target} is not in the allowlist`);
 				}
-				if (!exec.agent) {
-					return { delivered: false, target, denied_reason: "unavailable" };
-				}
-				const outcome = await bridge.requestApproval({
-					agent: exec.agent,
-					toolName: "onebot_send",
-					callId: exec.callId,
-					signal: exec.signal,
-					reason: `persona 想向 ${target} 发送消息：${content.slice(0, 200)}`,
-				});
-				if (outcome === "allowed-once") {
-					bridge.sendTargetApproved(target, content);
-					return { delivered: true, target };
-				}
-				return { delivered: false, target, denied_reason: outcome };
+				bridge.sendTarget(target, content);
+				return { delivered: true, target };
 			},
 		}),
 	);
@@ -201,7 +179,7 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 				assertOk(resp, "get_msg");
 				const data = (resp.data as GetMsgData | undefined) ?? {};
 				const messageId = String(data.message_id ?? id);
-				const text = data.message != null ? toTextWithId(data.message, messageId) : "";
+				const text = data.message != null ? messageToText(data.message, messageId) : "";
 				const userId = Number(data.user_id) || 0;
 				const time = Number(data.time) || 0;
 				const ts = time
