@@ -7,7 +7,6 @@ import {
 	formatHistory,
 	identity,
 	messageToText,
-	parseApproval,
 	parseMessageId,
 	parseTarget,
 } from "../src/protocol.ts";
@@ -65,18 +64,6 @@ test("chunkText splits long text at the cap", () => {
 	assert.deepEqual(chunkText("a".repeat(10), 0), ["a".repeat(10)]);
 });
 
-test("parseApproval understands 同意/批准/拒绝 with optional queue positions", () => {
-	assert.deepEqual(parseApproval("同意"), { approved: true, seq: null });
-	assert.deepEqual(parseApproval(" 同意 "), { approved: true, seq: null });
-	assert.deepEqual(parseApproval("同意2"), { approved: true, seq: 2 });
-	assert.deepEqual(parseApproval("批准"), { approved: true, seq: null });
-	assert.deepEqual(parseApproval("拒绝"), { approved: false, seq: null });
-	assert.deepEqual(parseApproval("拒绝3"), { approved: false, seq: 3 });
-	assert.equal(parseApproval("你好"), null);
-	assert.equal(parseApproval("同意x"), null);
-	assert.equal(parseApproval(""), null);
-});
-
 test("formatHistory renders readable lines with card/nickname", () => {
 	const messages = [
 		{
@@ -115,8 +102,8 @@ test("parseMessageId coerces numbers and strings", () => {
 });
 
 test("parseTarget parses private and group chat references", () => {
-	assert.deepEqual(parseTarget("private:2961354039"), { kind: "private", user_id: 2961354039 });
-	assert.deepEqual(parseTarget("group:551947633"), { kind: "group", group_id: 551947633 });
+	assert.deepEqual(parseTarget("private:123456789"), { kind: "private", user_id: 123456789 });
+	assert.deepEqual(parseTarget("group:987654321"), { kind: "group", group_id: 987654321 });
 	assert.equal(parseTarget("bogus"), null);
 	assert.equal(parseTarget("private:abc"), null);
 	assert.equal(parseTarget("group:"), null);

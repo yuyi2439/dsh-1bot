@@ -35,10 +35,13 @@ export const Config: z<OnebotConfig> = z.object({
 	mode: z.string().default("ws"),
 	/** Forward WebSocket URL of the OneBot implementation (NapCat default). */
 	ws_url: z.string().default("ws://127.0.0.1:3001"),
-	/** Access token sent as `Authorization: Bearer <token>` (optional). */
+	/** Access token appended to the WS URL as the `access_token` query
+	 * parameter (OneBot 11 forward-WS convention; optional). */
 	access_token: z.string().default(""),
 	/** Optional prefix: only messages starting with it are answered; it is
-	 * stripped before the text reaches the agent. */
+	 * stripped before the text reaches the agent. Strongly recommended in
+	 * group chats — without it every allowlisted message runs a full agent
+	 * turn (cost) and a busy chat queues turns up to the cap. */
 	prefix: z.string().default(""),
 	/** Allowlisted friend QQ ids (private chats). Empty list = nobody. */
 	friend_ids: z.array(z.number()).default([]),
@@ -54,8 +57,14 @@ export const Config: z<OnebotConfig> = z.object({
 	connect_retry_delay_secs: z.number().default(1),
 	/** Max characters per outbound QQ message (chunked above this). */
 	reply_chunk_size: z.number().default(4000),
-	/** Dormant field (QQ in-chat approval flow removed); kept for config compatibility. */
-	approval_timeout_secs: z.number().default(300),
+	/** Delay between consecutive outbound chunks of one reply (ms) — pacing
+	 * that keeps multi-chunk replies from tripping QQ rate control. */
+	reply_chunk_delay_ms: z.number().default(300),
+	/** Max turns queued per chat (running turn included); a message that would
+	 * exceed the cap is dropped with a warning instead of queueing without
+	 * bound (flood protection — the queue otherwise grows with every
+	 * allowlisted message while the agent is busy). */
+	max_pending_turns: z.number().default(8),
 	/**
 	 * Print the `onebot` logger to the process console. dsh-base mounts no
 	 * console exporter (logs only enter the in-memory buffer), so without

@@ -27,7 +27,7 @@ dsh plugin --profile onebot add dsh-1bot     # 初始化 profile 并从 npm 安�
     friend_ids: [123456789]          # 白名单：你的 QQ
     group_ids: []                    # 白名单：群
     reply_chunk_size: 4000
-    approval_timeout_secs: 300
+    max_pending_turns: 8
     console_log: true
 ```
 
@@ -44,15 +44,16 @@ dsh --profile onebot
 | `enabled` | `false` | 启动桥接 |
 | `mode` | `ws` | 仅支持 `ws`（正向 WebSocket） |
 | `ws_url` | `ws://127.0.0.1:3001` | OneBot 实现地址 |
-| `access_token` | `""` | 可选令牌（`Authorization: Bearer`） |
-| `prefix` | `""` | 只回复以它开头的消息，并剥掉前缀 |
+| `access_token` | `""` | 可选令牌，以 `?access_token=` 查询参数附加到 `ws_url`（OneBot 11 正向 WS 约定） |
+| `prefix` | `""` | 只回复以它开头的消息，并剥掉前缀。**群聊生产环境强烈建议设置**：留空时白名单内的每条消息都会触发一次完整 agent 回合（成本），刷屏时还会把队列堆到上限 |
 | `friend_ids` | `[]` | 私聊白名单；空 = 无人可入 |
 | `group_ids` | `[]` | 群白名单；空 = 无群可入 |
 | `workspace_root` | `$DSH_HOME/workspaces/onebot` | 聊天工作区根；每聊天一个 `<root>/chats/<sessionId>` 子目录（自动创建）。**稳定路径**，勿用随启动目录变化的路径，否则会话 cwd 冲突 |
 | `connect_retries` | `5` | 启动连接失败后的重试次数（每次间隔 `connect_retry_delay_secs`） |
 | `connect_retry_delay_secs` | `1` | 启动连接重试间隔（秒） |
 | `reply_chunk_size` | `4000` | 出站消息分块上限 |
-| `approval_timeout_secs` | `300` | 审批超时（秒）；QQ 内审批流已移除，字段休眠保留 |
+| `reply_chunk_delay_ms` | `300` | 同一条回复的分块发送间隔（毫秒），避免多块连发触发 QQ 风控 |
+| `max_pending_turns` | `8` | 每聊天排队回合上限（含正在运行的一个）；超出上限的新消息被丢弃并告警（刷屏防护） |
 | `console_log` | `true` | 把 onebot 日志打到控制台 |
 
 ## 工具

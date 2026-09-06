@@ -86,12 +86,6 @@ export type ChatRoute =
 	| { kind: "private"; user_id: number }
 	| { kind: "group"; group_id: number };
 
-/** An approve/deny command parsed from chat text (approval flow, dormant). */
-export interface ApprovalCommand {
-	approved: boolean;
-	seq: number | null;
-}
-
 /**
  * Per-segment-type text renderers. `text` keeps its content; every other
  * type falls back to the default renderer, which dumps ALL of the segment's
@@ -159,25 +153,6 @@ export function chunkText(text: string, maxChars: number): string[] {
 }
 
 /**
- * Parse an approve/deny command from a chat message: `同意` / `批准` /
- * `拒绝`, optionally with a 1-based queue position (`同意2`).
- */
-export function parseApproval(text: string | undefined | null): ApprovalCommand | null {
-	const trimmed = String(text ?? "").trim();
-	for (const [prefix, approved] of [
-		["同意", true],
-		["批准", true],
-		["拒绝", false],
-	] as const) {
-		if (!trimmed.startsWith(prefix)) continue;
-		const rest = trimmed.slice(prefix.length).trim();
-		if (rest === "") return { approved, seq: null };
-		if (/^\d+$/.test(rest)) return { approved, seq: Number(rest) };
-	}
-	return null;
-}
-
-/**
  * Render history messages as readable text for the LLM, one per line:
  * `[HH:MM] name(QQ) 消息ID:<id>: text`.
  */
@@ -207,8 +182,8 @@ export function parseMessageId(value: string | number | undefined): string {
 
 /**
  * Parse an adapter-independent chat target (`private:<QQ>` / `group:<群号>`),
- * shared by the outbound (`onebot_send`) and read (`onebot_read`) tools and
- * the bridge allowlist checks.
+ * shared by the outbound (`onebot_send`) and read (`onebot_get_msg_history`)
+ * tools and the bridge allowlist checks.
  */
 export function parseTarget(target: string | null | undefined): ChatRoute | null {
 	const [kind, id] = String(target ?? "").split(":");

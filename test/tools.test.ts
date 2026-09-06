@@ -179,9 +179,9 @@ test("onebot_get_msg_history returns the no-messages notice for an empty chat", 
 });
 
 test("sessionToRoute parses the dash-separated session id", () => {
-	assert.deepEqual(sessionToRoute("onebot-private-2961354039"), { kind: "private", user_id: 2961354039 });
-	assert.deepEqual(sessionToRoute("onebot-group-551947633"), { kind: "group", group_id: 551947633 });
-	assert.equal(sessionToRoute("onebot:private:2961354039"), null); // old colon format is gone
+	assert.deepEqual(sessionToRoute("onebot-private-123456789"), { kind: "private", user_id: 123456789 });
+	assert.deepEqual(sessionToRoute("onebot-group-987654321"), { kind: "group", group_id: 987654321 });
+	assert.equal(sessionToRoute("onebot:private:123456789"), null); // old colon format is gone
 	assert.equal(sessionToRoute("web_abc"), null);
 	assert.equal(sessionToRoute(undefined as unknown as string), null);
 });

@@ -21,6 +21,12 @@ import type { BridgeServices, OnebotConfig, OnebotService } from "./types.ts";
 /** Default max characters per outbound QQ message. */
 const MAX_MESSAGE_CHARS = 4000;
 
+/** Default delay between consecutive outbound chunks of one reply (ms). */
+const REPLY_CHUNK_DELAY_MS = 300;
+
+/** Default max turns queued per chat, running turn included. */
+const MAX_PENDING_TURNS = 8;
+
 /**
  * The default per-chat workspace root. STABLE on purpose: it must not depend
  * on the launch directory, or the same chat session would be persisted at a
@@ -81,8 +87,11 @@ export class OneBotBridge {
 	private readonly agentDefaultModel?: BridgeServices["agentDefaultModel"];
 	/** sessionId -> { agent, dispose } */
 	private readonly agentHandles = new Map<string, AgentHandle>();
-	/** sessionId -> tail Promise; serializes turns per chat. */
+	/** sessionId -> tail Promise; serializes turns per chat. Cleared once the
+	 * chain settles and no newer turn was queued behind it. */
 	private readonly turnChains = new Map<string, Promise<void>>();
+	/** sessionId -> count of queued-but-unfinished turns (flood cap). */
+	private readonly pendingTurns = new Map<string, number>();
 	private disposed = false;
 	/** Correlated action API, exposed for the tools (`bridge.api`). */
 	readonly api: OneBotClient;
@@ -185,17 +194,37 @@ export class OneBotBridge {
 	/**
 	 * Queue one turn for a chat. Turns of the same chat run strictly
 	 * sequentially (one in-flight agent turn at a time); a failing turn is
-	 * logged and never breaks the chain.
+	 * logged and never breaks the chain. The queue is capped at
+	 * `max_pending_turns` (running turn included): a message arriving beyond
+	 * the cap is DROPPED with a warning instead of queueing without bound —
+	 * a flooding chat must not pile up unbounded turns (each is a full LLM
+	 * turn) in memory.
 	 */
 	enqueueTurn(sessionId: string, text: string): Promise<void> {
+		const maxPending = this.config.max_pending_turns ?? MAX_PENDING_TURNS;
+		const pending = this.pendingTurns.get(sessionId) ?? 0;
+		if (pending >= maxPending) {
+			this.log.warn?.(
+				`onebot: turn queue full for ${sessionId} (${pending}/${maxPending} pending) — message dropped: ${text.slice(0, 100)}`,
+			);
+			return Promise.resolve();
+		}
+		this.pendingTurns.set(sessionId, pending + 1);
 		const prev = this.turnChains.get(sessionId) ?? Promise.resolve();
 		const run = prev.then(() => this.runTurn(sessionId, text));
-		this.turnChains.set(
-			sessionId,
-			run.catch((err) => {
-				this.log.warn?.(`onebot: turn failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
-			}),
-		);
+		const tail = run.catch((err) => {
+			this.log.warn?.(`onebot: turn failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+		});
+		this.turnChains.set(sessionId, tail);
+		void tail.then(() => {
+			const remaining = (this.pendingTurns.get(sessionId) ?? 1) - 1;
+			if (remaining <= 0) this.pendingTurns.delete(sessionId);
+			else this.pendingTurns.set(sessionId, remaining);
+			// A settled tail that is still the chain's head means the queue
+			// drained: drop the reference so the map never retains every chat
+			// (and its promise chain) for the process lifetime.
+			if (this.turnChains.get(sessionId) === tail) this.turnChains.delete(sessionId);
+		});
 		return run;
 	}
 
@@ -247,12 +276,19 @@ export class OneBotBridge {
 
 	// ── outbound ──────────────────────────────────────────────────────────
 
-	/** Send a reply to a route, chunked at the configured size. */
+	/**
+	 * Send a reply to a route, chunked at the configured size. Chunks go out
+	 * sequentially with `reply_chunk_delay_ms` between them — a tight loop of
+	 * multi-part sends is exactly what QQ rate control looks for. The method
+	 * stays synchronous (fire-and-forget): each chunk's failure is logged.
+	 */
 	sendReply(route: ChatRoute, text: string): void {
 		const maxChars = this.config.reply_chunk_size ?? MAX_MESSAGE_CHARS;
+		const delay = Math.max(0, this.config.reply_chunk_delay_ms ?? REPLY_CHUNK_DELAY_MS);
 		const target = route.kind === "private" ? `private:${route.user_id}` : `group:${route.group_id}`;
 		this.log.info?.(`send to ${target}: ${text.slice(0, 200)}`);
-		for (const chunk of chunkText(text, maxChars)) {
+		const chunks = chunkText(text, maxChars);
+		const sendOne = (chunk: string): void => {
 			if (route.kind === "private") {
 				this.client
 					.send("send_private_msg", {
@@ -268,7 +304,14 @@ export class OneBotBridge {
 					})
 					.catch((err) => this.log.warn?.(`onebot: ${err instanceof Error ? err.message : String(err)}`));
 			}
-		}
+		};
+		const sendChunk = (index: number): void => {
+			if (this.disposed || index >= chunks.length) return;
+			sendOne(chunks[index]);
+			if (index + 1 < chunks.length && delay > 0) setTimeout(() => sendChunk(index + 1), delay);
+			else if (index + 1 < chunks.length) sendChunk(index + 1);
+		};
+		sendChunk(0);
 	}
 
 	/** Send to a target; throws when the target is invalid or not allowlisted. */

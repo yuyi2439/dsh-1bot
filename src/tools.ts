@@ -31,11 +31,11 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 			description:
 				"Send a message to a QQ conversation session. target is private:<QQ> or group:<群号>; the target must be allowlisted. THIS is the only way to deliver any message, including your reply to the chat you are CURRENTLY talking in — each call sends immediately (no batching, no auto-send at turn end). To reply in multiple parts, call this tool once per part, in order; you may also answer first, look something up, then answer again.",
 			parameters: {
-				target: {
-					type: "string",
-					required: true,
-					description: "Target session, e.g. private:2961354039 or group:551947633 (use the current chat's id to reply)",
-				},
+					target: {
+						type: "string",
+						required: true,
+						description: "Target session, e.g. private:123456789 or group:987654321 (use the current chat's id to reply)",
+					},
 				content: {
 					type: "string",
 					required: true,
@@ -74,11 +74,11 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 			description:
 				"Read the recent message history of a QQ chat via the OneBot connection: group history (get_group_msg_history) or private/friend history (get_friend_msg_history). target is private:<QQ> or group:<群号>. Returns the last N messages as text.",
 			parameters: {
-				target: {
-					type: "string",
-					required: true,
-					description: "Chat to read, e.g. private:2961354039 or group:551947633",
-				},
+					target: {
+						type: "string",
+						required: true,
+						description: "Chat to read, e.g. private:123456789 or group:987654321",
+					},
 				limit: {
 					type: "number",
 					description: "Max messages to fetch (default 20, max 100)",

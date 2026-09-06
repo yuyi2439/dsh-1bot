@@ -18,7 +18,8 @@ const config: OnebotConfig = {
 	connect_retries: 5,
 	connect_retry_delay_secs: 1,
 	reply_chunk_size: 4000,
-	approval_timeout_secs: 300,
+	reply_chunk_delay_ms: 300,
+	max_pending_turns: 8,
 	console_log: true,
 };
 

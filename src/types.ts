@@ -21,7 +21,10 @@ export interface OnebotConfig {
 	/** Delay between startup connect attempts in seconds (default: 1). */
 	connect_retry_delay_secs: number;
 	reply_chunk_size: number;
-	approval_timeout_secs: number;
+	/** Delay between consecutive outbound chunks of one reply in ms (default: 300). */
+	reply_chunk_delay_ms: number;
+	/** Max turns queued per chat, running turn included (default: 8). */
+	max_pending_turns: number;
 	console_log: boolean;
 }
 

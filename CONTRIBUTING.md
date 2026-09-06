@@ -23,7 +23,7 @@ WS 协议层（连接/重连/echo/类型化 API/OnebotApiError）由
 [onebot.js](https://www.npmjs.com/package/onebot.js) 提供——本项目不再自带
 client 适配层，`index.ts` 用它的 `connect()` 工厂建立连接。
 
-`lib/` 是编译产物（gitignore）——**改完 `src/` 必须 `pnpm build`**：profile
+`lib/` 是编译产物（gitignore）——**改完** **`src/`** **必须** **`pnpm build`**：profile
 加载的是本 linked repo 的 `lib/`，不重建会一直用旧产物。
 
 ## 构建 / 类型检查 / 测试
@@ -45,13 +45,13 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
 
 ## 硬性规则（不可破坏）
 
-1. **工具名必须带 `onebot_` 前缀。** `send_message` 是 dsh 生态保留名（子
+1. **工具名必须带** **`onebot_`** **前缀。** `send_message` 是 dsh 生态保留名（子
    agent 控制的 follow-up 工具）；全局重名会导致启动失败。
-2. **schemastery 没有 `.optional()`** —— 对象字段默认可选，`cwd: z.string()`
+2. **schemastery 没有** **`.optional()`** —— 对象字段默认可选，`cwd: z.string()`
    即可。
-3. **`src/` 内相对导入必须带 `.ts` 后缀**（Node 原生执行；tsc 的
+3. **`src/`** **内相对导入必须带** **`.ts`** **后缀**（Node 原生执行；tsc 的
    `rewriteRelativeImportExtensions` 会在产物里改写为 `.js`）。
-4. **`defineTool` 从 `parameters` / `output.schema` 推断 `execute` 的 `args`
+4. **`defineTool`** **从** **`parameters`** **/** **`output.schema`** **推断** **`execute`** **的** **`args`
    和返回类型**；返回值必须匹配 output schema（`additionalProperties: false`
    强制）。
 5. **OneBot 响应成功判定**：`retcode === 0`，或缺 `retcode` 时 `status === "ok"`；
@@ -59,18 +59,19 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
    `get_friend_msg_history` 是 NapCat/go-cqhttp 扩展——不兼容时直接报错并
    建议改用 `onebot_get_content`（静默返回"没有消息"的空结果已移除，避免
    模型误判）。
-6. **自动发送与回复槽已移除——出站全部显式走 `onebot_send`**：桥接层曾在
+6. **自动发送与回复槽已移除——出站全部显式走** **`onebot_send`**：桥接层曾在
    回合结束时自动投递最终助手文本，导致与模型主动发送重复（双重回答），
    该机制连同按聊天暂存回复的槽一并移除（槽机制只增加延迟）。现在唯一发送
    途径是 `onebot_send`（目标须白名单，非白名单抛错），每次调用立即发送，
    模型可以"先回复、再查资料、再回复"（同回合多段）；`sendReply` 对每次
-   调用原样发送（只做分块），重复与否由模型自己负责，插件不做任何去重。
+   调用原样发送（只做分块，分块间按 `reply_chunk_delay_ms` 限速，防 QQ 风控），
+   重复与否由模型自己负责，插件不做任何去重。
    prompt/persona 注入不在本插件内（adapter 定位，由独立的 persona 层插件负责）。
-7. **控制台 exporter 的 `levels` 必须含 `default: -1`**：写
+7. **控制台 exporter 的** **`levels`** **必须含** **`default: -1`**：写
    `{ onebot: 2, default: -1 }` 只放行 onebot logger。只写 `{ onebot: 2 }`
    会泄漏其他插件的 info 日志到控制台；`[onebot info]` 标签来自
    `message.name`，绝不硬编码。
-8. **用 `ctx.effect(() => () => {...})` 做清理**（cordis 4 没有类型化的
+8. **用** **`ctx.effect(() => () => {...})`** **做清理**（cordis 4 没有类型化的
    `dispose` 事件）；清理必须同时调 `client.disconnect()` 和 `bridge.dispose()`，
    否则 HMR 重载会留下僵尸连接。
 9. **会话 id 格式** `onebot-private-<QQ>` / `onebot-group-<群号>`
@@ -78,7 +79,7 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
    `~003A`（Windows 安全路径段），`-` 原样保留。
 10. **profile 用户层 patch 整体替换 config**：编辑
     `$DSH_HOME/profiles/onebot/cordis.patch.yml` 时要重述所有保留字段。
-11. **`lib/` 被 gitignore**：提交/发布只带 `src/` 和 `cordis.patch.yml`；
+11. **`lib/`** **被 gitignore**：提交/发布只带 `src/` 和 `cordis.patch.yml`；
     npm `files` 只发布构建后的 `lib/`。
 12. **`ctx.onebot`**：运行时 = apply 里 `ctx.provide("onebot", service)`
     （随插件 fiber 自动释放）；类型侧 = src/index.ts 里的
@@ -95,7 +96,7 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
     `<workspace_root>/.onebot.lock` 拿 pid 锁（`acquireSingletonLock`，
     src/singleton.ts），另一个活实例持锁时拒绝启动；teardown 释放。onebot
     行只挂在 onebot profile，同一聊天只由一个实例桥接。
-15. **onebot 会话只放 `$DSH_HOME/sessions-hidden`，绝不放 `sessions/`**：
+15. **onebot 会话只放** **`$DSH_HOME/sessions-hidden`，绝不放** **`sessions/`**：
     web UI 打开它可见的会话会 resume（dsh-host-apiproxy 的 `agents.resume`），
     变成同一日志的第二个活写入者导致损坏（重复 seq）。bundle patch 把
     `session-persistence-jsonl.root` 覆盖为 `dshHomePath('sessions-hidden')`——
@@ -124,7 +125,7 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
     混两个 seed 会破坏回放。处理：停 dsh，删
     `$DSH_HOME/sessions-hidden/<normalized-cwd-dir>/<sessionId>/` 下的旧日志
     （目录名是 `--` + cwd 分隔符归一化成 `-` + `--`，例如
-    `--C-Users-<user>-.dsh-workspaces-onebot-chats-onebot-group-551947633--`），
+    `--C-Users-<user>-.dsh-workspaces-onebot-chats-onebot-group-987654321--`），
     重启，下一条消息会建全新会话。代价：该聊天旧历史反正已不可恢复。凡动工具或
     模型选择的重构后都预期会遇到——发版说明里提一句。升级 dsh 基线（peer
     版本变更）同样会改 seed（`request/header` 由 dsh 侧组装），处理方式相同。
@@ -136,12 +137,13 @@ QQ inbound ──► OneBotClient (forward WS) ──► Bridge.onMessageEvent
   · self-messages (user_id===self_id) / allowlist gate 在这里拦截，绝不进 agent
   · 非文本段 → 按类型渲染（默认 `[<type> msg id:<id> k=v …]`）；身份前缀
     `[好友 A(QQ)]` / `[群 N A(QQ)]`
-→ enqueueTurn（每聊天串行）→ ensureAgent（agents.create + 默认模型选择 +
-   installModelSelection；会话 cwd = `workspace_root/chats/<sessionId>`，
-   先 mkdir -p）
+→ enqueueTurn（每聊天串行，`max_pending_turns` 上限，超出丢弃并告警）→
+   ensureAgent（agents.create + 默认模型选择 + installModelSelection；
+   会话 cwd = `workspace_root/chats/<sessionId>`，先 mkdir -p）
 → agent.followup(userMessage) → whenIdle() → sessions.flush()
 → （自动发送已移除；模型在同回合内任意时刻调 onebot_send，每次调用立即投递）
-→ sendReply：分块（reply_chunk_size）→ send_private_msg / send_group_msg
+→ sendReply：分块（reply_chunk_size，分块间 reply_chunk_delay_ms 限速）→
+   send_private_msg / send_group_msg
 ```
 
 非白名单目标的 `onebot_send` 抛错；`onebot_send` 是唯一出站途径，当前聊天
@@ -151,8 +153,11 @@ QQ inbound ──► OneBotClient (forward WS) ──► Bridge.onMessageEvent
 
 - 协议层 / Bridge / 审批 / 工具：移植自 nota 项目（Rust）的 `nota-onebot`
   模块（types / client / api / bridge / config / tools）。
+
 - WS 协议/echo 层：[onebot.js](https://www.npmjs.com/package/onebot.js)
   （node-napcat-ts 的改名 fork；`fetch_ptt_text` 扩展、宽松成功判定、
   `OnebotApiError`/`invoke`/`connect` 工厂在本 fork 补充）。
+
 - 会话驱动（agents.create / followup / whenIdle / event folding）：参照
   `@deepseek-ai/dsh-headless` runner。
+

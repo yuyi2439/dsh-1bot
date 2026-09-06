@@ -49,7 +49,8 @@ export function buildPatchTemplate(config: OnebotConfig): string {
 		`#     friend_ids: [${config.friend_ids.join(", ")}]    # 私聊白名单；空 = 无人可入`,
 		`#     group_ids: [${config.group_ids.join(", ")}]      # 群白名单；空 = 无群可入`,
 		`#     reply_chunk_size: ${config.reply_chunk_size}`,
-		`#     approval_timeout_secs: ${config.approval_timeout_secs}`,
+		`#     reply_chunk_delay_ms: ${config.reply_chunk_delay_ms}`,
+		`#     max_pending_turns: ${config.max_pending_turns}`,
 		`#     console_log: ${config.console_log}`,
 	];
 	return lines.join("\n") + "\n";
