@@ -70,7 +70,7 @@ dsh --profile onebot
 - 白名单为空 = 所有消息被忽略（启动时控制台会警告）。
 - 日志形如 `[onebot info] 2026-…`；掉线会看到 `reconnecting` 重试日志——连接断开后按 `connect_retries` 有界重试，耗尽后停止（重新可用需重启进程）。
 - **首次启动若配置里没有 onebot 配置**：自动在 `$DSH_HOME/profiles/onebot/cordis.patch.yml` 追加带注释的配置模板并提示你编辑，然后退出；编辑好再启动。
-- **启动连不上 OneBot 是致命的**：重试 `connect_retries` 次（默认 5 次 × 1 秒）后报错退出（此路径不写配置文件——唯一写配置的是首次运行的模板门），检查 `ws_url`/`access_token` 后重新启动。
+- **启动连不上 OneBot 是致命的**：重试 `connect_retries` 次（默认 5 次 × 1 秒）后报错退出，并打印一条自足诊断：失败原因、实际尝试的 `ws_url`、`access_token` 是否设置、解析后的配置文件路径、重试预算，以及**实测** TCP 可达性给出的下一步（端口没人监听 → 启动实现端；端口通却被拒 → 核对令牌/路径）。此路径不写配置文件（唯一写配置的是首次运行的模板门）；改完运行 `dsh --profile onebot`。
 - **单实例**：第二个 dsh-1bot 进程会因锁（`<workspace_root>/.onebot.lock`）拒绝启动 —— 两个实例同时写同一会话会损坏日志。
 - **会话与 web 隔离**：onebot 会话持久化在 `$DSH_HOME/sessions-hidden`（非 `sessions/`）。web UI 打开它可见的会话会 resume 成第二个写入者导致日志损坏，隔离后 web 看不到也碰不到；监视请用 onebot 进程控制台日志。
 

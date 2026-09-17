@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { connect, type OneBotClient } from "onebot.js";
 import type { OneBotPostEvent } from "./protocol.ts";
 import { OneBotBridge, defaultWorkspaceRoot } from "./bridge.ts";
+import { formatConnectFailure, probeForwardWsPort } from "./connect-error.ts";
 import { ensureHiddenSessionsDocs, hiddenSessionsRoot } from "./hidden-sessions.ts";
 import { seedProfilePatch, profilePatchPath } from "./profile-setup.ts";
 import { acquireSingletonLock } from "./singleton.ts";
@@ -170,10 +171,24 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 			},
 		});
 	} catch (err) {
-		log.error?.(`${err instanceof Error ? err.message : String(err)}`);
+		// One record carrying the evidence instead of a raw error plus generic
+		// advice: this catch also covers failures that never reached the
+		// network (an unparseable ws_url), and the WS error alone cannot
+		// separate "nothing is listening" from "reachable but rejected" — the
+		// probe measures it. No config file is written here (the first-run gate
+		// above is the only writer).
 		log.error?.(
-			"OneBot 服务器连不上 —— 请检查 $DSH_HOME/profiles/onebot/cordis.patch.yml 中的 ws_url / access_token：" +
-				"NapCat 是否在运行、正向 WS 是否开启、地址/令牌是否正确，然后重新启动。",
+			formatConnectFailure(
+				{
+					wsUrl: config.ws_url,
+					hasAccessToken: config.access_token !== "",
+					cause: err instanceof Error ? err.message : String(err),
+					attempts: config.connect_retries + 1,
+					delaySecs: config.connect_retry_delay_secs ?? 1,
+					patchPath: profilePatchPath(),
+				},
+				await probeForwardWsPort(config.ws_url),
+			),
 		);
 		process.exit(1);
 	}

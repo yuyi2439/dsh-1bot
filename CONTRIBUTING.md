@@ -15,6 +15,8 @@ src/
   types.ts    shared types: OnebotConfig / BridgeServices (structural service slice) / OnebotService
   hidden-sessions.ts  seeds `$DSH_HOME/sessions-hidden/README.md` (web-resume hazard)
   profile-setup.ts    seeds the profile patch with a commented config template on first setup
+  connect-error.ts    shapes the fatal startup connect-failure report (TCP probe + wording)
+  singleton.ts        pid lock at `<workspace_root>/.onebot.lock` (one bridging instance)
 test/         node:test, imports src/*.ts directly (client.test.ts exercises onebot.js
               over a local ws server; the rest use structural fakes)
 ```
@@ -32,7 +34,7 @@ client 适配层，`index.ts` 用它的 `connect()` 工厂建立连接。
 pnpm install      # 依赖（typescript / @types/node / @types/ws）
 pnpm build        # src/*.ts → lib/*.js（profile 加载编译产物，改源码后必跑）
 pnpm typecheck    # src + test 类型检查
-pnpm test         # 43 个单测（Node ≥23.6 原生跑 .ts）
+pnpm test         # 46 个单测（Node ≥23.6 原生跑 .ts）
 ```
 
 ## 发布流程
@@ -105,8 +107,14 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
     src/hidden-sessions.ts）。
 16. **启动连不上是致命的**：`client.start()` 只在首次连接成功后 resolve；
     `connect_retries`（默认 5）次 × `connect_retry_delay_secs`（默认 1）后
-    reject，`apply` 打日志给指引并 `process.exit(1)`。此路径绝不能写配置文件——
-    下面的首次运行 gate 是唯一写入者。重连完全由 onebot.js 的
+    reject，`apply` 打日志给指引并 `process.exit(1)`。报告由
+    `formatConnectFailure`（src/connect-error.ts）拼成**一条**记录：原因 +
+    实际尝试的 ws_url + access_token 是否设置 + 解析后的配置文件路径 + 重试
+    预算与"进程已退出"，先用 `probeForwardWsPort` 实测一次 TCP 可达性再给指引
+    ——"端口没人监听"和"连上被拒"要查的方向相反，而 WS 错误本身分不出来
+    （onebot.js 原先在 close 路径上不回报 close code/reason，已在该 fork 的
+    `connect()` 补上）。此路径绝不能写配置文件——下面的首次运行 gate 是唯一
+    写入者。重连完全由 onebot.js 的
     `reconnection` 驱动：运行期掉线用同样的预算（次数 + 间隔）重试，耗尽后
     **停止重连**（不再有旧的永久重连循环），恢复需重启进程。
 17. **首次运行配置 gate**：profile patch 没有 `- id: onebot` 行时，
@@ -114,15 +122,16 @@ Tag 驱动、版本只校验不改写：先改 `package.json` 的 `version`（�
     一个全注释的配置模板，`apply` 打印如何配置并 `process.exit(1)`（在连接之前）。
     这是唯一写配置文件的地方。已存在的内容一律 append，覆盖写入已禁止；
     触发条件固定为"缺 `- id: onebot` 行"。
-18. **seed 不匹配 id collision（每次改工具/模型后都会复发）**：会话 seed
-    （初始 `request/header` + 工具定义快照）每次 `agents.create` 都会重新生成。
-    改了 onebot 工具集（名字、描述）、默认模型或 `agentOptions` 就会变 seed，
-    持久化层因此拒绝把新活会话接到旧磁盘日志上：
-    `session "<id>" already has a persisted log on disk that does not match
-    this live session (id collision)`（dsh-session-persistence 的
-    `adoptLivePrefix` 要求 `seedCoversPrefix`——活 seed 必须逐条前缀匹配已存
-    事件，`JSON.stringify` 相等）。这是**防损坏保护，不是 bug**：日志 append-only，
-    混两个 seed 会破坏回放。处理：停 dsh，删
+18. **已有日志时 `create` 必然被拒（每次改工具/模型后都会复发）**：会话 seed
+    是 `request/header` 事件（`config` + `adapterDefaults` + 完整工具 schema
+    快照，按名排序、逐个 `JSON.stringify` 比较），由 dsh-agent-loop 的
+    `buildRequest()` 在首个请求时写入。早期基线靠"seed 前缀不匹配"报
+    `id collision`；**0.1.5-rc.1 已无此机制**：`sessionPersistence.create()`
+    （dsh-session-persistence-jsonl）见到该 id 已有日志就无条件抛
+    `SessionAlreadyExistsError`——`session "<id>" already exists`，
+    不管 seed 是否相同（同一个 `findLog() !== undefined` 守卫，见该文件
+    `create()`/`rejectExistingLog()`）。这是**防损坏保护，不是 bug**：日志
+    append-only，两个 seed 混写会破坏回放。处理：停 dsh，删
     `$DSH_HOME/sessions-hidden/<normalized-cwd-dir>/<sessionId>/` 下的旧日志
     （目录名是 `--` + cwd 分隔符归一化成 `-` + `--`，例如
     `--C-Users-<user>-.dsh-workspaces-onebot-chats-onebot-group-987654321--`），
