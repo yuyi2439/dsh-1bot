@@ -1,40 +1,36 @@
-// OneBot-facing tools (ported from the nota project's Rust OneBot tools).
-// All tool names carry the `onebot_` prefix: `send_message` is a reserved
-// global name in the dsh ecosystem (subagent control), and a scoped prefix
-// keeps the whole family collision-free.
+// 面向 OneBot 的工具。工具名统一带 `onebot_` 前缀：`send_message` 是 dsh 生态的
+// 保留名（子 agent 控制用），加前缀避免冲突。
 import type { Context } from "@deepseek-ai/cordis";
 import { defineTool } from "@deepseek-ai/dsh-tools";
+import type { WSSendParam } from "onebot.js";
+import { parseTarget, routeHistory } from "./adapter/index.ts";
 import type { OneBotBridge } from "./bridge.ts";
 import type { GetMsgData, LoginInfoData, MsgHistoryData, PttTextData } from "./protocol.ts";
-import { formatHistory, identity, messageToText, parseMessageId, parseTarget } from "./protocol.ts";
+import { formatHistory, identity, messageToText, parseMessageId } from "./protocol.ts";
 
 /**
- * Compatibility hint for the NapCat/go-cqhttp extended friend-history API.
- * The client's `call` appends this to any `get_friend_msg_history` failure,
- * so an implementation that refuses the extension surfaces a direct error
- * instead of a silent empty result.
+ * 目标写法的抽象描述。具体有哪些种类由已启用的 adapter 决定，不在这里（也不在
+ * 工具描述里）复述——需要知道具体取值就看 adapter 的实现表。
  */
-const FRIEND_HISTORY_HINT =
-	"get_friend_msg_history is a NapCat/go-cqhttp extension; this OneBot implementation may not " +
-	"support reading private chat history — for a single message use onebot_get_content instead";
+const TARGET_SYNTAX = "<kind>:<id>, where kind is a chat kind of an enabled adapter";
 
 /**
- * Register every OneBot tool on `ctx.tools`.
- * @param ctx - the plugin context (tool registration is global here).
- * @param bridge - the active {@link OneBotBridge}; tools reach the protocol
- *   through `bridge.api` and outbound sending through the bridge methods.
+ * 在 `ctx.tools` 上注册全部 OneBot 工具。
+ * @param ctx - 插件上下文（此处的工具注册是全局的）。
+ * @param bridge - 当前生效的 {@link OneBotBridge}；工具通过 `bridge.api` 访问协议，
+ *   并通过 bridge 的方法完成对外发送。
  */
 export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 	ctx.tools.register(
 		defineTool({
 			name: "onebot_send",
 			description:
-				"Send a message to a QQ conversation session. target is private:<QQ> or group:<群号>; the target must be allowlisted. THIS is the only way to deliver any message, including your reply to the chat you are CURRENTLY talking in — each call sends immediately (no batching, no auto-send at turn end). To reply in multiple parts, call this tool once per part, in order; you may also answer first, look something up, then answer again.",
+				`Send a message to a OneBot conversation session. target is ${TARGET_SYNTAX}; the target must be allowlisted. THIS is the only way to deliver any message, including your reply to the chat you are CURRENTLY talking in — each call sends immediately (no batching, no auto-send at turn end). To reply in multiple parts, call this tool once per part, in order; you may also answer first, look something up, then answer again.`,
 			parameters: {
 					target: {
 						type: "string",
 						required: true,
-						description: "Target session, e.g. private:123456789 or group:987654321 (use the current chat's id to reply)",
+						description: `Target session (use the current chat's id to reply)`,
 					},
 				content: {
 					type: "string",
@@ -72,12 +68,12 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 		defineTool({
 			name: "onebot_get_msg_history",
 			description:
-				"Read the recent message history of a QQ chat via the OneBot connection: group history (get_group_msg_history) or private/friend history (get_friend_msg_history). target is private:<QQ> or group:<群号>. Returns the last N messages as text.",
+				`Read the recent message history of a OneBot chat via the OneBot connection. target is ${TARGET_SYNTAX}. Returns the last N messages as text.`,
 			parameters: {
 					target: {
 						type: "string",
 						required: true,
-						description: "Chat to read, e.g. private:123456789 or group:987654321",
+						description: "Chat to read",
 					},
 				limit: {
 					type: "number",
@@ -98,18 +94,20 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 			async execute(args) {
 				const target = String(args.target);
 				const route = parseTarget(target);
-				if (!route) throw new Error("target must be private:<QQ> or group:<群号>");
+				if (!route) throw new Error(`target must be ${TARGET_SYNTAX}`);
 				const limit = args.limit == null ? 20 : Number(args.limit);
 				if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
 					throw new Error("limit must be an integer between 1 and 100");
 				}
-				const data = (await bridge.api.invoke(
-					route.kind === "group" ? "get_group_msg_history" : "get_friend_msg_history",
-					route.kind === "group"
-						? { group_id: route.group_id, message_seq: 0, count: limit }
-						: { user_id: route.user_id, message_seq: 0, count: limit },
-					{ hint: route.kind === "private" ? FRIEND_HISTORY_HINT : undefined },
-				)) as unknown as MsgHistoryData;
+				// 动作名与参数由种类表提供，不写死种类。该种类没声明 history
+				// （实现端不支持该接口）时直接报错，不静默返回空结果。
+				const history = routeHistory(route, limit);
+				if (!history) {
+					throw new Error(`reading message history is not supported for target kind '${route.kind}'`);
+				}
+				const data = (await bridge.api.invoke(history.action as keyof WSSendParam, history.params as never, {
+					hint: history.hint,
+				})) as unknown as MsgHistoryData;
 				const messages = data?.messages ?? [];
 				const text = formatHistory(messages);
 				return {
@@ -124,7 +122,7 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 		defineTool({
 			name: "onebot_get_content",
 			description:
-				"Get the full content of a specific QQ message by its message id (e.g. the id in a [reply msg id:...], [image msg id:...] or [record msg id:...] segment) and return sender, time and full text.",
+				"Get the full content of a specific OneBot message by its message id (e.g. the id in a [reply msg id:...], [image msg id:...] or [record msg id:...] segment) and return sender, time and full text.",
 			parameters: {
 				message_id: {
 					type: "string",
@@ -174,7 +172,7 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 		defineTool({
 			name: "onebot_status",
 			description:
-				"Get the OneBot connection status and the bot's own QQ account info (QQ number and nickname) via the OneBot connection.",
+				"Get the OneBot connection status and the bot's own account info (account number and nickname) via the OneBot connection.",
 			parameters: {},
 			output: {
 				schema: {
@@ -184,13 +182,13 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 						user_id: { type: "integer", required: true },
 						nickname: { type: "string", required: true },
 						connected: { type: "boolean", required: true },
-						ws_url: { type: "string", required: true },
+						url: { type: "string", required: true },
 					},
 				},
 				render: (_args, value) => [
 					{
 						type: "text",
-						text: `Bot status: QQ ${value.user_id} (${value.nickname}) · connected: ${value.connected} · ${value.ws_url}`,
+						text: `Bot status: ${value.user_id} (${value.nickname}) · connected: ${value.connected} · ${value.url}`,
 					},
 				],
 			},
@@ -204,14 +202,14 @@ export function registerOneBotTools(ctx: Context, bridge: OneBotBridge): void {
 						user_id = Number(data?.user_id) || 0;
 						nickname = data?.nickname ?? "";
 					} catch {
-						// Not connected in the meantime; report the state as-is.
+						// 期间可能已断开连接；按当前状态如实上报。
 					}
 				}
 				return {
 					user_id,
 					nickname,
 					connected,
-					ws_url: bridge.config.ws_url,
+					url: bridge.transportUrl,
 				};
 			},
 		}),

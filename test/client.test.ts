@@ -1,20 +1,19 @@
-// Integration tests for the onebot.js client (the plugin's protocol layer):
-// the connect factory resolves only on an established connection, events are
-// forwarded, invoke resolves with data and formats failures. Run against a
-// local `ws` server, so no live OneBot implementation is needed.
+// onebot.js 客户端（本插件的协议层）的集成测试：connect 工厂只在连接建立后
+// resolve，事件会被转发，invoke 成功时给出 data、失败时格式化错误。测试跑在
+// 本地 `ws` 服务器上，因此不需要真实的 OneBot 实现。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { WebSocketServer, type WebSocket } from "ws";
-import { connect, type OneBotClient, type OneBotLog } from "onebot.js";
+import { connect, type OneBotClient, type OneBotLogger } from "onebot.js";
 
-const silentLog: OneBotLog = {
+/** 客户端只写 info/warn/debug；测试里这些方法什么都不用做。 */
+const silentLogger: OneBotLogger = {
 	info() {},
 	warn() {},
 	debug() {},
-	error() {},
 };
 
-/** Wait until the predicate holds (poll every 10ms). */
+/** 等到断言成立（每 10ms 轮询一次）。 */
 async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (Date.now() < deadline) {
@@ -24,7 +23,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 	throw new Error("waitFor: condition not met in time");
 }
 
-/** A fake OneBot implementation: answers echoed actions, can push events. */
+/** 一个假的 OneBot 实现：会应答带 echo 的动作，也能主动推送事件。 */
 class FakeOneBotServer {
 	readonly wss: WebSocketServer;
 	private readonly sockets = new Set<WebSocket>();
@@ -44,25 +43,25 @@ class FakeOneBotServer {
 		return `ws://127.0.0.1:${address.port}`;
 	}
 
-	/** The first connected client socket (tests use a single client). */
+	/** 第一个连上来的客户端 socket（测试只用单个客户端）。 */
 	get socket(): WebSocket {
 		const ws = this.sockets.values().next().value;
 		assert.ok(ws, "no client socket connected");
 		return ws;
 	}
 
-	/** Answer one action frame with a success envelope. */
+	/** 用一条成功信封应答某个动作帧。 */
 	reply(frame: Record<string, any>, data: unknown, overrides: Record<string, unknown> = {}): void {
 		this.socket.send(JSON.stringify({ echo: frame.echo, status: "ok", retcode: 0, data, ...overrides }));
 	}
 
-	/** Push one OneBot event (no echo) to every connected client. */
+	/** 向每个已连接客户端推送一个 OneBot 事件（不带 echo）。 */
 	push(event: Record<string, unknown>): void {
 		const body = JSON.stringify(event);
 		for (const ws of this.sockets) ws.send(body);
 	}
 
-	/** Await the next action frame the client sends. */
+	/** 等待客户端发出的下一个动作帧。 */
 	nextFrame(): Promise<Record<string, any>> {
 		return new Promise((resolve) => this.socket.once("message", (data) => resolve(JSON.parse(String(data)))));
 	}
@@ -75,7 +74,7 @@ class FakeOneBotServer {
 
 test("connect resolves on establishment; events forwarded; invoke resolves with data", async (t) => {
 	const server = new FakeOneBotServer();
-	const bot = await connect({ baseUrl: await server.url(), accessToken: "", log: silentLog });
+	const bot = await connect({ baseUrl: await server.url(), accessToken: "", logger: silentLogger });
 	t.after(() => {
 		bot.disconnect();
 		return server.close();
@@ -85,7 +84,7 @@ test("connect resolves on establishment; events forwarded; invoke resolves with 
 	const receivedEvents: Array<Record<string, unknown>> = [];
 	bot.on("message", (event) => receivedEvents.push(event as unknown as Record<string, unknown>));
 
-	// Server pushes a private message event; the client must forward it.
+	// 服务器推送一个私聊消息事件；客户端必须转发它。
 	server.push({
 		post_type: "message",
 		message_type: "private",
@@ -101,7 +100,7 @@ test("connect resolves on establishment; events forwarded; invoke resolves with 
 	await waitFor(() => receivedEvents.length === 1);
 	assert.equal(receivedEvents[0].message_type, "private");
 
-	// Typed correlated call: frame carries action/params/echo; data comes back.
+	// 带类型的关联调用：帧里带 action/params/echo；data 会回来。
 	const framePromise = server.nextFrame();
 	const invokePromise = bot.invoke("get_login_info", {});
 	const frame = await framePromise;
@@ -114,7 +113,7 @@ test("connect resolves on establishment; events forwarded; invoke resolves with 
 
 test("invoke accepts a status-only ok answer without retcode (LLOnebot style)", async (t) => {
 	const server = new FakeOneBotServer();
-	const bot = await connect({ baseUrl: await server.url(), accessToken: "", log: silentLog });
+	const bot = await connect({ baseUrl: await server.url(), accessToken: "", logger: silentLogger });
 	t.after(() => {
 		bot.disconnect();
 		return server.close();
@@ -124,7 +123,7 @@ test("invoke accepts a status-only ok answer without retcode (LLOnebot style)", 
 	const framePromise = server.nextFrame();
 	const invokePromise = bot.invoke("get_login_info", {});
 	const frame = await framePromise;
-	// No retcode at all — status "ok" alone must settle the call as success.
+	// 完全没有 retcode —— 仅凭 status "ok" 就必须判定调用成功。
 	server.socket.send(JSON.stringify({ echo: frame.echo, status: "ok", data: { user_id: 7, nickname: "Bot" } }));
 	const data = await invokePromise;
 	assert.deepEqual(data, { user_id: 7, nickname: "Bot" });
@@ -132,7 +131,7 @@ test("invoke accepts a status-only ok answer without retcode (LLOnebot style)", 
 
 test("invoke formats failures with action, retcode, detail and the hint", async (t) => {
 	const server = new FakeOneBotServer();
-	const bot = await connect({ baseUrl: await server.url(), accessToken: "", log: silentLog });
+	const bot = await connect({ baseUrl: await server.url(), accessToken: "", logger: silentLogger });
 	t.after(() => {
 		bot.disconnect();
 		return server.close();
@@ -153,15 +152,15 @@ test("invoke formats failures with action, retcode, detail and the hint", async 
 
 test("send writes fire-and-forget frames", async (t) => {
 	const server = new FakeOneBotServer();
-	const bot = await connect({ baseUrl: await server.url(), accessToken: "", log: silentLog });
+	const bot = await connect({ baseUrl: await server.url(), accessToken: "", logger: silentLogger });
 	t.after(() => {
 		bot.disconnect();
 		return server.close();
 	});
 	await waitFor(() => bot.connected);
 
-	// Fire-and-forget usage: the frame is written immediately; the promise
-	// still settles once the implementation answers (or the socket drops).
+	// fire-and-forget 用法：帧会立刻写出；promise 仍会在实现端应答（或
+	// socket 断开）后 settle。
 	const framePromise = server.nextFrame();
 	const sendPromise = bot.send("send_private_msg", {
 		user_id: 123,
@@ -180,7 +179,7 @@ test("connect throws after bounded attempts when the server is unreachable", asy
 		connect({
 			baseUrl: "ws://127.0.0.1:1",
 			accessToken: "",
-			log: silentLog,
+			logger: silentLogger,
 			reconnection: { enable: true, attempts: 3, delay: 20 },
 		}),
 		/could not connect/,

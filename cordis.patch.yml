@@ -1,33 +1,18 @@
-# The dsh-1bot bundle patch: OneBot 11 as a UI surface, riding directly over
-# dsh-base (same service shape as web — a long-running front door — but the
-# "browser" is QQ via NapCat / LLOneBot over forward WebSocket). It mounts no
-# Host, HTTP server, Web runtime, or browser plugin.
-#
-# Runtime settings (ws_url, allowlists, prefix, …) belong in the profile's
-# user layer ($DSH_HOME/profiles/onebot/cordis.patch.yml), which outranks this
-# file. Remember: an id-targeted patch REPLACES the row's whole config, so a
-# user override must restate every field it keeps.
+# dsh-1bot bundle patch：把 onebot 插件挂进 profile。
+# 运行配置在用户层 $DSH_HOME/profiles/onebot/cordis.patch.yml，优先级高于本文件；
+# id 定向 patch 整段替换该行 config，覆盖时需重述所有保留字段。
 
-# Isolate onebot session persistence from $DSH_HOME/sessions. The web UI
-# resumes any session it can see when you open it (agents.resume), which makes
-# it a second live writer on the same log and corrupts it (duplicate seq).
-# Sessions under sessions-hidden use the exact same jsonl backend/defaults —
-# only the root differs, so the web profile (which scans sessions/) can never
-# see or resume them.
+# 会话持久化根改到 sessions-hidden，与 web 扫描的 sessions/ 隔离，
+# 防止 web UI resume 同一日志造成双写损坏（原理详见 src/session.ts）。
 - id: session-persistence-jsonl
   config:
     root: !!js dshHomePath('sessions-hidden')
 
+# 挂载插件行——没有它插件不会被加载，首次运行的配置模板门也不会触发。
+# 只写 enabled: true（配置门依赖它，否则 apply 在门之前就返回），其余字段全部走
+# config.ts 的 DEFAULTS 与各 adapter 自己声明的默认值，避免两处默认值漂移。
 - insert:
     - id: onebot
       name: 'dsh-1bot'
       config:
         enabled: true
-        mode: ws
-        ws_url: 'ws://127.0.0.1:3001'
-        access_token: ''
-        prefix: ''
-        friend_ids: []
-        group_ids: []
-        reply_chunk_size: 4000
-        approval_timeout_secs: 300

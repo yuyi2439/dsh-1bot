@@ -1,17 +1,13 @@
-// Process-level singleton lock for the OneBot bridge.
-//
-// Two dsh processes running the onebot plugin against the same profile both
-// bridge the same QQ chats and append to the same persisted sessions; each
-// process owns its own seq counter, so interleaved appends corrupt the logs
-// (duplicate/missing seq). The lock makes a second instance refuse to start.
+// 进程级单例锁：两个 dsh 进程桥接同样的聊天会各自独立计数 seq，写坏同一批
+// 持久化会话。第二个实例拒绝启动。
 import { open, readFile, unlink, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
 /**
- * Try to take an exclusive lock file (containing this process's pid).
- * @param lockPath - the lock file path (e.g. `<workspace_root>/.onebot.lock`).
- * @returns a disposer that removes the lock, or `null` when another LIVE
- *   process holds it (a stale lock — pid gone — is taken over).
+ * 尝试获取独占锁文件（内容为本进程 pid）。
+ * @param lockPath - 锁文件路径。
+ * @returns 删除锁的 disposer；另一个存活进程持锁时返回 `null`（pid 已消失的
+ *   过期锁会被接管）。
  */
 export async function acquireSingletonLock(lockPath: string): Promise<(() => Promise<void>) | null> {
 	await mkdir(dirname(lockPath), { recursive: true });
@@ -23,7 +19,7 @@ export async function acquireSingletonLock(lockPath: string): Promise<(() => Pro
 			try {
 				await unlink(lockPath);
 			} catch {
-				// already gone — nothing to release
+				// 已经不在了
 			}
 		};
 	} catch (err) {
@@ -31,16 +27,16 @@ export async function acquireSingletonLock(lockPath: string): Promise<(() => Pro
 		try {
 			const pid = Number((await readFile(lockPath, "utf8")).trim());
 			process.kill(pid, 0);
-			// EPERM above (exists, owned elsewhere) and "no throw" both mean live.
+			// 没抛错 = 进程存活。
 			return null;
 		} catch (err2) {
-			const code = (err2 as NodeJS.ErrnoException).code;
-			if (code === "EPERM") return null; // alive but not ours to signal
-			// ESRCH / unreadable → stale lock; take it over.
+			// EPERM = 存活，但信号不归我们发。
+			if ((err2 as NodeJS.ErrnoException).code === "EPERM") return null;
+			// ESRCH / 读不出来 → 过期锁，接管它。
 			try {
 				await unlink(lockPath);
 			} catch {
-				// ignore
+				// 忽略
 			}
 			return acquireSingletonLock(lockPath);
 		}

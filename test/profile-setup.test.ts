@@ -1,35 +1,35 @@
-// Tests for the profile patch seeding (src/profile-setup.ts).
+// profile patch 种子（src/profile-setup.ts）的测试。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PROFILE_TEMPLATE_HEADER, buildPatchTemplate, seedProfilePatch } from "../src/profile-setup.ts";
-import type { OnebotConfig } from "../src/types.ts";
+import type { OnebotConfig } from "../src/config.ts";
 
 const config: OnebotConfig = {
 	enabled: true,
-	mode: "ws",
-	ws_url: "ws://127.0.0.1:3001",
 	access_token: "",
 	prefix: "",
-	friend_ids: [123],
-	group_ids: [],
+	adapters: [{ type: "qq", config: { url: "ws://127.0.0.1:3001", friend_ids: [123], group_ids: [] } }],
+	workspace_root: "C:\\ws",
 	connect_retries: 5,
 	connect_retry_delay_secs: 1,
 	reply_chunk_size: 4000,
 	reply_chunk_delay_ms: 300,
-	max_pending_turns: 8,
 	console_log: true,
+	log_local_time: true,
 };
 
 test("buildPatchTemplate is fully commented and reflects the config", () => {
 	const t = buildPatchTemplate(config);
 	assert.ok(t.includes(PROFILE_TEMPLATE_HEADER));
 	assert.ok(t.includes("- id: onebot"));
-	assert.ok(t.includes("ws_url: 'ws://127.0.0.1:3001'"));
+	assert.ok(t.includes("url: 'ws://127.0.0.1:3001'"), "adapter 的连接地址出现在 adapter 段里");
 	assert.ok(t.includes("friend_ids: [123]"));
-	// Every non-blank line is a comment: the template itself never activates.
+	// 每个通用字段都在模板里现身（含日志时区开关）。
+	assert.ok(t.includes(`#     log_local_time: ${config.log_local_time}`));
+	// 每个非空行都是注释：模板本身永远不会生效。
 	const lines = t.split("\n").map((l) => l.trim()).filter((l) => l !== "");
 	assert.ok(lines.every((l) => l.startsWith("#")), "template stays fully commented");
 });

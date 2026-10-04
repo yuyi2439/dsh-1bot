@@ -1,169 +1,104 @@
-// dsh-1bot plugin entry: OneBot 11 as a dsh UI surface (profile bundle over
-// dsh-base, on par with web/tui). Mounts the WS client, the chat ⇄ agent
-// bridge, and the OneBot tools (onebot_* family), and exposes the
-// `ctx.onebot` service for other plugins (e.g. a persona-layer plugin).
-import type { Context, Message } from "@deepseek-ai/cordis";
-import z from "@deepseek-ai/schemastery";
+// dsh-1bot 插件入口：把 OneBot 11 变成 dsh 的一个 UI 表面。挂载 WS 客户端、
+// 聊天 ⇄ agent 桥接层与 onebot_* 工具，并暴露 `ctx.onebot` 服务给其他插件。
+import type { Context } from "@deepseek-ai/cordis";
 import { join } from "node:path";
 import { connect, type OneBotClient } from "onebot.js";
-import type { OneBotPostEvent } from "./protocol.ts";
-import { OneBotBridge, defaultWorkspaceRoot } from "./bridge.ts";
+import { OneBotBridge } from "./bridge.ts";
+import { allowlistForKind, enabledAdapters, enabledRouteKinds, transportUrl } from "./adapter/index.ts";
+import { Config, type OnebotConfig } from "./config.ts";
 import { formatConnectFailure, probeForwardWsPort } from "./connect-error.ts";
-import { ensureHiddenSessionsDocs, hiddenSessionsRoot } from "./hidden-sessions.ts";
+import { mountConsoleExporter } from "./log.ts";
+import type { OneBotPostEvent } from "./protocol.ts";
 import { seedProfilePatch, profilePatchPath } from "./profile-setup.ts";
+import { ensureHiddenSessionsDocs, hiddenSessionsRoot } from "./session.ts";
 import { acquireSingletonLock } from "./singleton.ts";
 import { registerOneBotTools } from "./tools.ts";
-import type { OnebotConfig, OnebotService } from "./types.ts";
+import { publicService, type OnebotService } from "./service.ts";
 
 declare module "@deepseek-ai/cordis" {
 	interface Context {
-		/** The active OneBot service, provided while the plugin is enabled. */
+		/** 插件启用期间提供的活动 OneBot 服务。 */
 		onebot: OnebotService;
 	}
 }
 
-/** Cordis plugin name used by loader diagnostics. */
+/** 供 loader 诊断使用的 cordis 插件名。 */
 export const name = "onebot";
 
-/** Core services required before the bridge can drive agents. */
-export const inject: string[] = ["tools", "agents", "sessions", "agentDefaultModel"];
+/** 桥接层驱动 agent 之前必须就绪的核心服务。 */
+export const inject: string[] = ["tools", "agents", "sessions", "sessionPersistence", "agentDefaultModel"];
 
-/** Plugin configuration (all fields optional; defaults are the shipped caps). */
-export const Config: z<OnebotConfig> = z.object({
-	/** Whether to start the OneBot bridge with the profile. */
-	enabled: z.boolean().default(false),
-	/** Connection mode; only `"ws"` (forward WebSocket) is implemented. */
-	mode: z.string().default("ws"),
-	/** Forward WebSocket URL of the OneBot implementation (NapCat default). */
-	ws_url: z.string().default("ws://127.0.0.1:3001"),
-	/** Access token appended to the WS URL as the `access_token` query
-	 * parameter (OneBot 11 forward-WS convention; optional). */
-	access_token: z.string().default(""),
-	/** Optional prefix: only messages starting with it are answered; it is
-	 * stripped before the text reaches the agent. Strongly recommended in
-	 * group chats — without it every allowlisted message runs a full agent
-	 * turn (cost) and a busy chat queues turns up to the cap. */
-	prefix: z.string().default(""),
-	/** Allowlisted friend QQ ids (private chats). Empty list = nobody. */
-	friend_ids: z.array(z.number()).default([]),
-	/** Allowlisted group ids. Empty list = no group. */
-	group_ids: z.array(z.number()).default([]),
-	/** Root for per-chat workspaces; each chat session gets
-	 * `<workspace_root>/chats/<sessionId>` (default: `$DSH_HOME/workspaces/onebot`). */
-	workspace_root: z.string(),
-	/** Startup connect retries after the first attempt; the process exits with
-	 * guidance when the server stays unreachable. */
-	connect_retries: z.number().default(5),
-	/** Delay between startup connect attempts (seconds). */
-	connect_retry_delay_secs: z.number().default(1),
-	/** Max characters per outbound QQ message (chunked above this). */
-	reply_chunk_size: z.number().default(4000),
-	/** Delay between consecutive outbound chunks of one reply (ms) — pacing
-	 * that keeps multi-chunk replies from tripping QQ rate control. */
-	reply_chunk_delay_ms: z.number().default(300),
-	/** Max turns queued per chat (running turn included); a message that would
-	 * exceed the cap is dropped with a warning instead of queueing without
-	 * bound (flood protection — the queue otherwise grows with every
-	 * allowlisted message while the agent is busy). */
-	max_pending_turns: z.number().default(8),
-	/**
-	 * Print the `onebot` logger to the process console. dsh-base mounts no
-	 * console exporter (logs only enter the in-memory buffer), so without
-	 * this the profile runs silent; keep it on unless embedding the plugin
-	 * in a profile that already surfaces logs (e.g. web).
-	 */
-	console_log: z.boolean().default(true),
-});
+/** 插件配置 schema（loader 从入口读取这个导出）。 */
+export { Config };
 
-/** Render one structured log message as a plain console line. */
-function formatLogLine(message: Message): string {
-	const time = new Date(message.ts).toISOString().replace("T", " ").slice(0, 19);
-	const args = message.args
-		.map((arg) => {
-			if (typeof arg === "string") return arg;
-			try {
-				return JSON.stringify(arg);
-			} catch {
-				return String(arg);
-			}
-		})
-		.join(" ");
-	return `[${message.name} ${message.type}] ${time} ${args}`;
-}
-
-/**
- * Mount the OneBot UI surface. No-op unless `enabled` and `mode === "ws"`.
- */
+/** 挂载 OneBot UI 表面。`enabled` 为假时不做任何事。 */
 export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 	if (!config.enabled) return;
-	if (config.mode !== "ws") {
-		ctx.logger?.("onebot").warn?.(`onebot: unsupported mode '${config.mode}', only 'ws' is implemented`);
-		return;
+	// logger 是 cordis 内建服务，任何 ctx 都有它。
+	const logger = ctx.logger("onebot");
+	if (config.console_log) {
+		mountConsoleExporter(ctx.logger, config.log_local_time);
 	}
-	const log = ctx.logger?.("onebot") ?? console;
-	// dsh-base mounts no console exporter, so register one for the `onebot`
-	// logger when the profile should be observable from the terminal.
-	// `default: -1` is load-bearing: without it every other plugin's info
-	// log falls through the levels filter and leaks onto the console.
-	if (config.console_log && ctx.logger?.exporter) {
-		ctx.logger.exporter({
-			colors: 0,
-			levels: { onebot: 2, default: -1 }, // only the onebot logger (error/info/warn)
-			export: (message) => {
-				const line = formatLogLine(message);
-				(message.type === "error" ? process.stderr : process.stdout).write(line + "\n");
-			},
-		});
-	}
-	// First-run config gate: with no `- id: onebot` row in the profile patch
-	// the plugin is not configured. Append the commented template, tell the
-	// user what to do, and exit BEFORE connecting — this is the ONLY place
-	// the config file is touched; the connect path never modifies it.
+	// 首次运行配置门：patch 里没有 `- id: onebot` 行时种下模板并退出。这是唯一
+	// 写配置文件的地方。
 	if (await seedProfilePatch(config)) {
-		log.info?.(`配置模板已写入 ${profilePatchPath()}`);
-		log.info?.(
-			"请编辑该文件：取消注释并按需修改（enabled / ws_url / access_token / friend_ids / group_ids …），" +
-				"同时删除文件顶部的 `[]`，然后重新启动 dsh --profile onebot。",
+		logger.info(`配置模板已写入 ${profilePatchPath()}`);
+		logger.info(
+			"请编辑该文件：取消注释并按需修改，同时删除文件顶部的 `[]`，" +
+				"然后重新启动 dsh --profile onebot。",
 		);
 		process.exit(1);
 	}
-	log.info?.(
-		`starting: ws_url=${config.ws_url} mode=${config.mode} ` +
-			`friends=[${config.friend_ids.join(",")}] groups=[${config.group_ids.join(",")}]`,
-	);
-	if (config.friend_ids.length === 0 && config.group_ids.length === 0) {
-		log.warn?.(
-			"friend_ids and group_ids are both empty — every incoming message is ignored. " +
-				"Set friend_ids/group_ids in $DSH_HOME/profiles/onebot/cordis.patch.yml " +
+	// 连接地址由 adapter 自己的配置提供。
+	const url = transportUrl(config);
+	if (!url) {
+		logger.error(
+			"no enabled adapter declares a connection URL — nothing to connect to. " +
+				"Enable an adapter (with its connection settings) in $DSH_HOME/profiles/onebot/cordis.patch.yml " +
+				"(an id-targeted patch replaces the whole onebot config; restate every field).",
+		);
+		return;
+	}
+	const adapters = enabledAdapters(config);
+	logger.info(`starting: url=${url} adapters=[${adapters.map((a) => a.adapter.type).join(",")}]`);
+	for (const { adapter } of adapters) {
+		const lists = Object.keys(adapter.routes).map((kind) => `${kind}=[${allowlistForKind(config, kind).join(",")}]`);
+		logger.info(`  ${adapter.type}: ${lists.join(" ")}`);
+	}
+	// 没有启用任何 adapter，或所有白名单都为空 = 没有消息会被处理。
+	const kinds = enabledRouteKinds(config);
+	if (kinds.length === 0) {
+		logger.warn(
+			"no adapter is enabled — every incoming message is ignored. " +
+				"Configure `adapters` in $DSH_HOME/profiles/onebot/cordis.patch.yml " +
+				"(an id-targeted patch replaces the whole onebot config; restate every field).",
+		);
+	} else if (kinds.every((kind) => allowlistForKind(config, kind).length === 0)) {
+		logger.warn(
+			`every allowlist is empty (${kinds.join(", ")}) — every incoming message is ignored. ` +
+				"Configure the adapters' allowlists in $DSH_HOME/profiles/onebot/cordis.patch.yml " +
 				"(an id-targeted patch replaces the whole onebot config; restate every field).",
 		);
 	}
-	// Single-instance guard: two dsh processes bridging the same chats append
-	// to the same persisted sessions with independent seq counters, which
-	// corrupts the logs. Refuse to start when another live instance holds the
-	// lock, instead of silently corrupting shared sessions.
-	const workspaceRoot = config.workspace_root ?? defaultWorkspaceRoot();
-	const releaseLock = await acquireSingletonLock(join(workspaceRoot, ".onebot.lock"));
+	// 单实例守卫：两个进程桥接同样的聊天会各自独立计数 seq，写坏同一份日志。
+	const workspaceRoot = config.workspace_root;
+	const lockPath = join(workspaceRoot, ".onebot.lock");
+	const releaseLock = await acquireSingletonLock(lockPath);
 	if (!releaseLock) {
-		log.error?.(
-			`another dsh-1bot instance is already running (lock held at ${join(workspaceRoot, ".onebot.lock")}) — ` +
+		logger.error(
+			`another dsh-1bot instance is already running (lock held at ${lockPath}) — ` +
 				"refusing to start; stop the other instance first (two instances corrupt the shared chat sessions)",
 		);
 		return;
 	}
-	// Create the hidden sessions root (where session-persistence-jsonl stores
-	// these sessions) together with its explanatory README, so anyone opening
-	// the directory understands why it exists outside the web-scanned root.
 	await ensureHiddenSessionsDocs(hiddenSessionsRoot());
-	// onebot.js's connect(): resolves only once the connection is established
-	// (bounded retries: 1 + connect_retries, connect_retry_delay_secs apart)
-	// and throws when every attempt failed — handled below as a fatal error.
+	// connect() 只在连接建立后 resolve；重试预算耗尽时抛出，下面按致命错误处理。
 	let client: OneBotClient;
 	try {
 		client = await connect({
-			baseUrl: config.ws_url,
+			baseUrl: url,
 			accessToken: config.access_token,
-			log,
+			logger,
 			reconnection: {
 				enable: true,
 				attempts: config.connect_retries + 1,
@@ -171,54 +106,34 @@ export async function apply(ctx: Context, config: OnebotConfig): Promise<void> {
 			},
 		});
 	} catch (err) {
-		// One record carrying the evidence instead of a raw error plus generic
-		// advice: this catch also covers failures that never reached the
-		// network (an unparseable ws_url), and the WS error alone cannot
-		// separate "nothing is listening" from "reachable but rejected" — the
-		// probe measures it. No config file is written here (the first-run gate
-		// above is the only writer).
-		log.error?.(
+		logger.error(
 			formatConnectFailure(
 				{
-					wsUrl: config.ws_url,
+					wsUrl: url,
 					hasAccessToken: config.access_token !== "",
 					cause: err instanceof Error ? err.message : String(err),
 					attempts: config.connect_retries + 1,
 					delaySecs: config.connect_retry_delay_secs ?? 1,
 					patchPath: profilePatchPath(),
 				},
-				await probeForwardWsPort(config.ws_url),
+				await probeForwardWsPort(url),
 			),
 		);
 		process.exit(1);
 	}
-	const bridge = new OneBotBridge({
-		ctx,
-		config,
-		client,
-		log,
-		agents: ctx.get("agents")!,
-		sessions: ctx.get("sessions")!,
-		agentDefaultModel: ctx.get("agentDefaultModel"),
-	});
+	const bridge = new OneBotBridge(ctx, config, client);
 
 	client.on("message", (event) => {
 		bridge.onMessageEvent(event as unknown as OneBotPostEvent).catch((err) => {
-			log.warn?.(`onebot: event handling failed: ${err instanceof Error ? err.message : String(err)}`);
+			logger.warn(`event handling failed: ${err instanceof Error ? err.message : String(err)}`);
 		});
 	});
 	registerOneBotTools(ctx, bridge);
-	// dsh-1bot is an ADAPTER only: no prompt/persona injection here (that
-	// belongs to a separate persona-layer plugin). The onebot_send tool's own
-	// description carries the reply contract ("this is the only way to
-	// deliver any message — call it to reply in the current chat").
-	ctx.provide("onebot", bridge.publicService());
-	// Tear down on plugin unload (e.g. HMR): stop the socket loop, dispose
-	// every chat agent, and release the singleton lock.
+	ctx.provide("onebot", publicService(bridge));
+	// 插件卸载（如 HMR）时清理；agent 由 cordis 随创建它的 fiber 一起释放。
 	ctx.effect(
 		() => async () => {
 			client.disconnect();
-			bridge.dispose();
 			await releaseLock();
 		},
 		"onebot: teardown",

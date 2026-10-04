@@ -1,5 +1,4 @@
-// Unit tests for the dependency-free protocol helpers (ported from the
-// nota-onebot types test suite).
+// 零依赖协议辅助函数（src/protocol.ts）的单元测试。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -8,7 +7,6 @@ import {
 	identity,
 	messageToText,
 	parseMessageId,
-	parseTarget,
 } from "../src/protocol.ts";
 
 test("messageToText keeps text segments and passes plain strings through", () => {
@@ -99,13 +97,4 @@ test("parseMessageId coerces numbers and strings", () => {
 	assert.equal(parseMessageId(1234567890), "1234567890");
 	assert.equal(parseMessageId("99"), "99");
 	assert.equal(parseMessageId(undefined), "");
-});
-
-test("parseTarget parses private and group chat references", () => {
-	assert.deepEqual(parseTarget("private:123456789"), { kind: "private", user_id: 123456789 });
-	assert.deepEqual(parseTarget("group:987654321"), { kind: "group", group_id: 987654321 });
-	assert.equal(parseTarget("bogus"), null);
-	assert.equal(parseTarget("private:abc"), null);
-	assert.equal(parseTarget("group:"), null);
-	assert.equal(parseTarget(undefined), null);
 });

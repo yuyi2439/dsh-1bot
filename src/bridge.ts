@@ -1,312 +1,156 @@
-// OneBot ⇄ dsh agent bridge (ported from the nota project's Rust OneBot
-// bridge, adapted to the dsh agent/session model). OneBot is a UI surface
-// on par with web/tui: each QQ chat (private/group) maps to one dsh agent +
-// session; inbound messages drive turns. The bridge owns the allowlist and
-// reply chunking; sending is ALWAYS explicit via the onebot_send tool (each
-// call delivers immediately, so the model can answer, research, then answer
-// again in one turn). There is no reply slot and no auto-send.
-import { mkdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+// OneBot ⇄ dsh agent 桥接层：插件的中枢，持有完整的 OneBotClient 与 apply 收到的
+// Context，dsh 服务（agents / sessions / sessionPersistence）都从 ctx 上取。
+//
+// 每个聊天对应一个 dsh agent + session，入站消息驱动回合；发送**一律**由
+// onebot_send 工具显式发起，没有回复槽，也没有自动发送。
 import type { Context } from "@deepseek-ai/cordis";
-import type { AgentHandle } from "@deepseek-ai/dsh-agent";
+import { mkdir } from "node:fs/promises";
 import { installModelSelection } from "@deepseek-ai/dsh-agent";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 import { SessionId } from "@deepseek-ai/dsh-session";
-import { type OneBotClient, type OneBotLog } from "onebot.js";
-import type { ChatRoute, OneBotMessageEvent, OneBotPostEvent } from "./protocol.ts";
-import { chunkText, identity, isMessageEvent, messageToText, parseTarget } from "./protocol.ts";
-import type { BridgeServices, OnebotConfig, OnebotService } from "./types.ts";
+import type { OneBotClient, WSSendParam } from "onebot.js";
+import { allowlistFor, parseTarget, routeId, routeSpecFor, routeTarget, transportUrl, type ChatRoute } from "./adapter/index.ts";
+import { chatWorkspace, DEFAULTS, type OnebotConfig } from "./config.ts";
+import type { OneBotMessageEvent, OneBotPostEvent } from "./protocol.ts";
+import { chunkText, isMessageEvent, messageToText } from "./protocol.ts";
+import { chatRoute, messageRoute } from "./session.ts";
 
-/** Default max characters per outbound QQ message. */
-const MAX_MESSAGE_CHARS = 4000;
-
-/** Default delay between consecutive outbound chunks of one reply (ms). */
-const REPLY_CHUNK_DELAY_MS = 300;
-
-/** Default max turns queued per chat, running turn included. */
-const MAX_PENDING_TURNS = 8;
-
-/**
- * The default per-chat workspace root. STABLE on purpose: it must not depend
- * on the launch directory, or the same chat session would be persisted at a
- * different cwd after `dsh` starts elsewhere and the session store rejects
- * the id (persisted-vs-live cwd collision).
- */
-export function defaultWorkspaceRoot(): string {
-	const home = process.env.DSH_HOME ?? join(homedir(), ".dsh");
-	return join(home, "workspaces", "onebot");
-}
-
-/** Derive one chat's workspace folder under the configured root. */
-export function chatWorkspace(workspaceRoot: string, sessionId: string): string {
-	return join(workspaceRoot, "chats", sessionId);
-}
-
-/**
- * Map a OneBot session id back to its reply route. The id deliberately uses
- * `-` separators (`onebot-private-<QQ>` / `onebot-group-<群号>`) so the JSONL
- * backend stores it verbatim — `:` would be escaped to `~003A` on disk.
- */
-export function sessionToRoute(sessionId: string): ChatRoute | null {
-	const m = /^onebot-(private|group)-(\d+)$/.exec(String(sessionId ?? ""));
-	if (!m) return null;
-	return m[1] === "private"
-		? { kind: "private", user_id: Number(m[2]) }
-		: { kind: "group", group_id: Number(m[2]) };
-}
-
-/** Session id + identity prefix for an inbound message event. */
-function routeForMessage(msg: OneBotMessageEvent): { sessionId: string; prefix: string } | null {
-	if (msg.message_type === "private") {
-		return {
-			sessionId: `onebot-private-${msg.user_id}`,
-			prefix: `[好友 ${identity(msg.sender, msg.user_id)}] `,
-		};
-	}
-	if (msg.message_type === "group" && msg.group_id != null) {
-		return {
-			sessionId: `onebot-group-${msg.group_id}`,
-			prefix: `[群 ${msg.group_id} ${identity(msg.sender, msg.user_id)}] `,
-		};
-	}
-	return null;
-}
-
-/**
- * OneBot chat ⇄ dsh agent bridge. Constructed by the plugin entry with the
- * resolved services; the client is started and disposed by the entry too.
- */
+/** OneBot 聊天 ⇄ dsh agent 桥接层。 */
 export class OneBotBridge {
-	private readonly ctx: Context;
+	readonly ctx: Context;
 	readonly config: OnebotConfig;
 	readonly client: OneBotClient;
-	private readonly log: OneBotLog;
-	private readonly agents: BridgeServices["agents"];
-	private readonly sessions: BridgeServices["sessions"];
-	private readonly agentDefaultModel?: BridgeServices["agentDefaultModel"];
-	/** sessionId -> { agent, dispose } */
-	private readonly agentHandles = new Map<string, AgentHandle>();
-	/** sessionId -> tail Promise; serializes turns per chat. Cleared once the
-	 * chain settles and no newer turn was queued behind it. */
-	private readonly turnChains = new Map<string, Promise<void>>();
-	/** sessionId -> count of queued-but-unfinished turns (flood cap). */
-	private readonly pendingTurns = new Map<string, number>();
-	private disposed = false;
-	/** Correlated action API, exposed for the tools (`bridge.api`). */
+	/** 带 echo 关联的动作 API，供工具使用。 */
 	readonly api: OneBotClient;
 
-	constructor({
-		ctx,
-		config,
-		client,
-		log,
-		agents,
-		sessions,
-		agentDefaultModel,
-	}: {
-		ctx: Context;
-		config: OnebotConfig;
-		client: OneBotClient;
-		log?: OneBotLog;
-		agents: BridgeServices["agents"];
-		sessions: BridgeServices["sessions"];
-		agentDefaultModel?: BridgeServices["agentDefaultModel"];
-	}) {
+	constructor(ctx: Context, config: OnebotConfig, client: OneBotClient) {
 		this.ctx = ctx;
 		this.config = config;
 		this.client = client;
-		this.log = log ?? console;
-		this.agents = agents;
-		this.sessions = sessions;
-		this.agentDefaultModel = agentDefaultModel;
 		this.api = client;
 	}
 
-	// ── inbound ───────────────────────────────────────────────────────────
+	/** 当前连接的实现端地址；未配置时为空串。 */
+	get transportUrl(): string {
+		return transportUrl(this.config) ?? "";
+	}
 
-	/**
-	 * Handle one OneBot post event (called from the client's message
-	 * handler). Only `message` events are acted on; everything else is
-	 * ignored. Never rejects.
-	 */
+	// ── 入站 ──────────────────────────────────────────────────────────────
+
+	/** 处理一个 OneBot post 事件；只对 `message` 事件动作，永不 reject。 */
 	async onMessageEvent(event: OneBotPostEvent): Promise<void> {
+		const logger = this.ctx.logger("onebot");
 		try {
-			if (this.disposed || !isMessageEvent(event)) return;
+			if (!isMessageEvent(event)) return;
 			const msg: OneBotMessageEvent = event;
-			// Never answer our own messages.
 			if (msg.user_id === msg.self_id) {
-				this.log.info?.(`ignored own message (user_id=${msg.user_id})`);
+				logger.info(`ignored own message (user_id=${msg.user_id})`);
 				return;
 			}
-			// Entry gate: non-allowlisted chats never reach the agent.
 			if (!this.isAllowed(msg)) {
-				this.log.info?.(
+				logger.info(
 					`ignored message from non-allowlisted chat (type=${msg.message_type} ` +
 						`user_id=${msg.user_id}${msg.group_id != null ? ` group_id=${msg.group_id}` : ""})`,
 				);
 				return;
 			}
 
-			// Non-text segments render per type (default: all data as key=value
-			// plus the message id); the persona fetches content with a tool.
 			let text = messageToText(msg.message, String(msg.message_id ?? ""));
 			if (!text.trim()) {
-				this.log.info?.(`ignored empty message from ${msg.message_type}:${msg.user_id}`);
+				logger.info(`ignored empty message from ${msg.message_type}:${msg.user_id}`);
 				return;
 			}
 			if (this.config.prefix) {
 				if (!text.startsWith(this.config.prefix)) {
-					this.log.info?.(`ignored message without prefix '${this.config.prefix}' from ${msg.message_type}:${msg.user_id}`);
+					logger.info(`ignored message without prefix '${this.config.prefix}' from ${msg.message_type}:${msg.user_id}`);
 					return;
 				}
 				text = text.slice(this.config.prefix.length).trimStart();
 			}
 
-			const route = routeForMessage(msg);
+			const route = chatRoute(msg);
 			if (!route) return;
-			this.log.info?.(`message from ${route.sessionId}: ${text.slice(0, 200)}`);
-			this.enqueueTurn(route.sessionId, route.prefix + text);
+			logger.info(`message from ${route.sessionId}: ${text.slice(0, 200)}`);
+			await this.enqueueTurn(route.sessionId, route.prefix + text);
 		} catch (err) {
-			this.log.warn?.(`onebot: event handling failed: ${err instanceof Error ? err.message : String(err)}`);
+			logger.warn(`event handling failed: ${err instanceof Error ? err.message : String(err)}`);
 		}
 	}
 
-	/** Whether a message event comes from an allowlisted chat. */
+	/** 该消息事件是否来自放行的聊天。 */
 	isAllowed(msg: OneBotMessageEvent): boolean {
-		if (msg.message_type === "private") return this.config.friend_ids.includes(msg.user_id);
-		if (msg.message_type === "group") return msg.group_id != null && this.config.group_ids.includes(msg.group_id);
-		return false;
+		const route = messageRoute(msg);
+		return route != null && this.isAllowedRoute(route);
 	}
 
-	/** Whether a target string (`private:<QQ>` / `group:<群号>`) is allowlisted. */
+	/** 目标字符串是否在白名单内。 */
 	isAllowedTarget(target: string): boolean {
 		const route = parseTarget(target);
 		return route != null && this.isAllowedRoute(route);
 	}
 
 	private isAllowedRoute(route: ChatRoute): boolean {
-		return route.kind === "private"
-			? this.config.friend_ids.includes(route.user_id)
-			: this.config.group_ids.includes(route.group_id);
+		return allowlistFor(this.config, route).includes(routeId(route));
 	}
 
 	/**
-	 * Queue one turn for a chat. Turns of the same chat run strictly
-	 * sequentially (one in-flight agent turn at a time); a failing turn is
-	 * logged and never breaks the chain. The queue is capped at
-	 * `max_pending_turns` (running turn included): a message arriving beyond
-	 * the cap is DROPPED with a warning instead of queueing without bound —
-	 * a flooding chat must not pile up unbounded turns (each is a full LLM
-	 * turn) in memory.
+	 * 把一个回合交给这个聊天的 agent：没有活 agent 就建一个（已有持久化日志则
+	 * resume，否则 create），再 followup。串行与排队由 dsh agent 自己的 inbox
+	 * 负责，本插件不再排一层队列。
 	 */
-	enqueueTurn(sessionId: string, text: string): Promise<void> {
-		const maxPending = this.config.max_pending_turns ?? MAX_PENDING_TURNS;
-		const pending = this.pendingTurns.get(sessionId) ?? 0;
-		if (pending >= maxPending) {
-			this.log.warn?.(
-				`onebot: turn queue full for ${sessionId} (${pending}/${maxPending} pending) — message dropped: ${text.slice(0, 100)}`,
-			);
-			return Promise.resolve();
-		}
-		this.pendingTurns.set(sessionId, pending + 1);
-		const prev = this.turnChains.get(sessionId) ?? Promise.resolve();
-		const run = prev.then(() => this.runTurn(sessionId, text));
-		const tail = run.catch((err) => {
-			this.log.warn?.(`onebot: turn failed for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
-		});
-		this.turnChains.set(sessionId, tail);
-		void tail.then(() => {
-			const remaining = (this.pendingTurns.get(sessionId) ?? 1) - 1;
-			if (remaining <= 0) this.pendingTurns.delete(sessionId);
-			else this.pendingTurns.set(sessionId, remaining);
-			// A settled tail that is still the chain's head means the queue
-			// drained: drop the reference so the map never retains every chat
-			// (and its promise chain) for the process lifetime.
-			if (this.turnChains.get(sessionId) === tail) this.turnChains.delete(sessionId);
-		});
-		return run;
-	}
-
-	/** Drive one full turn: followup → quiescence → flush. */
-	private async runTurn(sessionId: string, text: string): Promise<void> {
-		if (this.disposed) return;
-		const { agent } = await this.ensureAgent(sessionId);
-		await agent.whenIdle();
-		agent.followup(
-			createUserMessage({
-				content: [{ type: "text", text }],
-				source: { kind: "user" },
-			}),
-		);
-		await agent.whenIdle();
-		await this.sessions.flush(agent.session);
-		// NO auto-send: the bridge never delivers anything on its own. Every
-		// outbound message goes through the onebot_send tool, which calls
-		// sendReply immediately — so the model can reply, look things up,
-		// and reply again within one turn, each call sending right away.
-	}
-
-	/**
-	 * Get (or create) the agent for a chat session. Creation mirrors
-	 * `dsh-headless`: default model selection + per-agent model install.
-	 * Each chat gets its own dynamic workspace folder
-	 * (`<workspace_root>/chats/<sessionId>`, created on first use), so files
-	 * and the session's cwd stay isolated per conversation.
-	 */
-	private async ensureAgent(sessionId: string): Promise<AgentHandle> {
-		const existing = this.agentHandles.get(sessionId);
-		if (existing) return existing;
-		const cwd = chatWorkspace(this.config.workspace_root ?? defaultWorkspaceRoot(), sessionId);
-		await mkdir(cwd, { recursive: true });
-		const selection = this.agentDefaultModel?.currentSelection();
-		const handle = await this.agents.create({
-			sessionId: SessionId(sessionId),
-			meta: { cwd },
-			agentOptions: selection ? { provider: selection.provider, model: selection.model } : {},
-			setup: selection
-				? (agentCtx) => {
+	async enqueueTurn(sessionId: string, text: string): Promise<void> {
+		const id = SessionId(sessionId);
+		const agents = this.ctx.agents;
+		let agent = agents.get(id);
+		if (!agent) {
+			// resume 沿用日志里的 cwd，但仍要保证工作区存在。
+			const cwd = chatWorkspace(this.config.workspace_root, sessionId);
+			await mkdir(cwd, { recursive: true });
+			// agentDefaultModel 是可选的（没有它就按 agent-loop 的默认模型走），
+			// 所以按名字取、取不到就不装模型选择。
+			const selection = this.ctx.get("agentDefaultModel")?.currentSelection();
+			const setup = selection
+				? (agentCtx: Context) => {
 						installModelSelection(agentCtx, { current: selection, assembled: undefined });
 				  }
-				: undefined,
-		});
-		this.agentHandles.set(sessionId, handle);
-		return handle;
+				: undefined;
+			const agentOptions = selection ? { provider: selection.provider, model: selection.model } : {};
+			// 服务的类型声明来自声明它的包；持久化后端的声明包还没有成为本插件的依赖，
+			// 所以这里只能按名字取（值是同一个 ctx.sessionPersistence）。
+			const durable = await this.ctx.get("sessionPersistence")!.stat(id);
+			const handle = durable
+				? await agents.resume({ resumeSessionId: id, agentOptions, setup })
+				: await agents.create({ sessionId: id, meta: { cwd }, agentOptions, setup });
+			agent = handle.agent;
+		}
+		agent.followup(createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }));
+		await agent.whenIdle();
+		await this.ctx.sessions.flush(agent.session);
 	}
 
-	// ── outbound ──────────────────────────────────────────────────────────
+	// ── 出站 ──────────────────────────────────────────────────────────────
 
 	/**
-	 * Send a reply to a route, chunked at the configured size. Chunks go out
-	 * sequentially with `reply_chunk_delay_ms` between them — a tight loop of
-	 * multi-part sends is exactly what QQ rate control looks for. The method
-	 * stays synchronous (fire-and-forget): each chunk's failure is logged.
+	 * 向某路由发送回复，按 `reply_chunk_size` 切分，分块间按
+	 * `reply_chunk_delay_ms` 限速。同步 fire-and-forget：每块失败各自记日志。
+	 * 动作名与参数来自该种类所属 adapter。
 	 */
 	sendReply(route: ChatRoute, text: string): void {
-		const maxChars = this.config.reply_chunk_size ?? MAX_MESSAGE_CHARS;
-		const delay = Math.max(0, this.config.reply_chunk_delay_ms ?? REPLY_CHUNK_DELAY_MS);
-		const target = route.kind === "private" ? `private:${route.user_id}` : `group:${route.group_id}`;
-		this.log.info?.(`send to ${target}: ${text.slice(0, 200)}`);
+		const logger = this.ctx.logger("onebot");
+		const maxChars = this.config.reply_chunk_size ?? DEFAULTS.reply_chunk_size;
+		const delay = Math.max(0, this.config.reply_chunk_delay_ms ?? DEFAULTS.reply_chunk_delay_ms);
+		const target = routeTarget(route);
+		logger.info(`send to ${target}: ${text.slice(0, 200)}`);
 		const chunks = chunkText(text, maxChars);
 		const sendOne = (chunk: string): void => {
-			if (route.kind === "private") {
-				this.client
-					.send("send_private_msg", {
-						user_id: route.user_id,
-						message: [{ type: "text", data: { text: chunk } }],
-					})
-					.catch((err) => this.log.warn?.(`onebot: ${err instanceof Error ? err.message : String(err)}`));
-			} else {
-				this.client
-					.send("send_group_msg", {
-						group_id: route.group_id,
-						message: [{ type: "text", data: { text: chunk } }],
-					})
-					.catch((err) => this.log.warn?.(`onebot: ${err instanceof Error ? err.message : String(err)}`));
-			}
+			const message = [{ type: "text", data: { text: chunk } }];
+			const { action, params } = routeSpecFor(route.kind)!.action(routeId(route), message);
+			this.client
+				.send(action as keyof WSSendParam, params as never)
+				.catch((err) => logger.warn(err instanceof Error ? err.message : String(err)));
 		};
 		const sendChunk = (index: number): void => {
-			if (this.disposed || index >= chunks.length) return;
+			if (index >= chunks.length) return;
 			sendOne(chunks[index]);
 			if (index + 1 < chunks.length && delay > 0) setTimeout(() => sendChunk(index + 1), delay);
 			else if (index + 1 < chunks.length) sendChunk(index + 1);
@@ -314,32 +158,11 @@ export class OneBotBridge {
 		sendChunk(0);
 	}
 
-	/** Send to a target; throws when the target is invalid or not allowlisted. */
+	/** 发往某目标；目标非法或不在白名单时抛错。 */
 	sendTarget(target: string, text: string): void {
 		const route = parseTarget(target);
 		if (!route) throw new Error(`invalid target: ${target}`);
 		if (!this.isAllowedRoute(route)) throw new Error(`target ${target} is not in the allowlist`);
 		this.sendReply(route, text);
-	}
-
-	// ── service surface / teardown ────────────────────────────────────────
-
-	/** The `ctx.onebot` service value exposed for other plugins (e.g. a persona-layer plugin). */
-	publicService(): OnebotService {
-		return {
-			client: this.client,
-			isAllowedTarget: (target) => this.isAllowedTarget(target),
-			send: (target, text) => this.sendTarget(target, text),
-			sendReply: (route, text) => this.sendReply(route, text),
-		};
-	}
-
-	/** Stop accepting work and dispose every agent. */
-	dispose(): void {
-		this.disposed = true;
-		for (const handle of this.agentHandles.values()) {
-			handle.dispose().catch(() => {});
-		}
-		this.agentHandles.clear();
 	}
 }

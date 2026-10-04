@@ -1,30 +1,29 @@
-// Tool-level tests: exercise the registered definitions through a fake
-// bridge/client, so the execute bodies (routing, validation, formatting) are
-// covered without a live OneBot connection. The fake `api.invoke(method,
-// params, opts)` mirrors the onebot.js-backed client: it resolves with the
-// response DATA and throws the model-readable formatted error on failure.
+// 工具层测试：通过假的 bridge/client 跑已注册的定义，从而在不需要真实 OneBot
+// 连接的情况下覆盖 execute 主体（路由、校验、格式化）。假 `api.invoke(method,
+// params, opts)` 模拟 onebot.js 支撑的客户端：成功时 resolve 出响应的 DATA，
+// 失败时抛出模型可读的格式化错误。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Context } from "@deepseek-ai/cordis";
 import type { ToolDefinition, ToolRunContext } from "@deepseek-ai/dsh-tools";
 import { registerOneBotTools } from "../src/tools.ts";
-import { sessionToRoute } from "../src/bridge.ts";
+import { sessionToRoute } from "../src/session.ts";
 import type { OneBotBridge } from "../src/bridge.ts";
 
 const noExec = {} as ToolRunContext;
 
-/** Minimal bridge surface the tools actually touch. */
+/** 工具实际会碰到的 bridge 最小表面。 */
 interface FakeBridge {
 	api: {
 		invoke(method: unknown, params?: unknown, opts?: { hint?: string }): Promise<unknown>;
 		isConnected?(): boolean;
 	};
-	config?: { ws_url?: string };
+	transportUrl?: string;
 	isAllowedTarget?(target: string): boolean;
 	sendTarget?(target: string, text: string): void;
 }
 
-/** Register the tools against a fake ctx and return the definitions. */
+/** 用假的 ctx 注册工具，并返回这些定义。 */
 function collectTools(bridge: FakeBridge): ToolDefinition[] {
 	const defs: ToolDefinition[] = [];
 	const ctx = { tools: { register: (def: ToolDefinition) => defs.push(def) } };
@@ -147,8 +146,8 @@ test("onebot_get_msg_history surfaces the client's formatted error with the hint
 	const bridge = {
 		api: {
 			invoke: async (method: unknown, _params: unknown, opts?: { hint?: string }) => {
-				// Mirror the onebot.js-backed client: failures arrive as
-				// formatted errors, with the tool's hint appended.
+				// 模拟 onebot.js 支撑的客户端：失败以格式化错误到达，
+				// 并附上工具给出的 hint。
 				throw new Error(
 					`${method} failed: status=failed retcode=1404, detail="不支持该接口"${opts?.hint ? ` — ${opts.hint}` : ""}`,
 				);
@@ -194,7 +193,7 @@ test("onebot_status reports connection state without throwing", async () => {
 				throw new Error("must not be called when disconnected");
 			},
 		},
-		config: { ws_url: "ws://127.0.0.1:3001" },
+		transportUrl: "ws://127.0.0.1:3001",
 	};
 	const status = collectTools(bridge).find((def) => def.name === "onebot_status");
 	const out = (await status!.execute({}, noExec)) as Record<string, unknown>;
@@ -202,6 +201,6 @@ test("onebot_status reports connection state without throwing", async () => {
 		user_id: 0,
 		nickname: "",
 		connected: false,
-		ws_url: "ws://127.0.0.1:3001",
+		url: "ws://127.0.0.1:3001",
 	});
 });

@@ -1,30 +1,32 @@
-// OneBot 11 wire helpers and types (ported from the nota project's Rust
-// OneBot types; the wire/echo layer itself now lives in onebot.js).
-// Dependency-free module: safe to unit-test without any @deepseek-ai package.
+// OneBot 11 报文类型与辅助函数（报文/echo 层由 onebot.js 提供）。零依赖模块：
+// 不需要任何 @deepseek-ai 包即可单测。
+//
+// 这里只放与平台无关的报文处理：消息段渲染、身份显示名、分块、历史格式化。
+// 平台接线方式在 adapter/ 下（契约见 adapter/types.ts）。
 
-/** One message segment as delivered by the implementation. */
+/** 实现端下发的一个消息段。 */
 export interface OneBotSegment {
 	type?: string;
 	data?: Record<string, unknown>;
 }
 
-/** A OneBot message body: either a plain string or an array of segments. */
+/** OneBot 消息体：纯字符串，或消息段数组。 */
 export type OneBotMessage = string | OneBotSegment[];
 
-/** OneBot `sender` object (group card preferred over nickname). */
+/** OneBot 的 `sender` 对象（群名片优先于昵称）。 */
 export interface OneBotSender {
 	user_id?: number;
 	nickname?: string;
 	card?: string;
 }
 
-/** Any inbound post event (message / notice / meta), discriminated by post_type. */
+/** 任意入站 post 事件（message / notice / meta），按 post_type 区分。 */
 export interface OneBotPostEvent {
 	post_type?: string;
 	[key: string]: unknown;
 }
 
-/** A `post_type: "message"` event (private or group). */
+/** `post_type: "message"` 事件（种类由 `message_type` 表示）。 */
 export interface OneBotMessageEvent {
 	post_type: "message";
 	message_type: string;
@@ -39,12 +41,12 @@ export interface OneBotMessageEvent {
 	[key: string]: unknown;
 }
 
-/** Narrow an arbitrary post event to a message event. */
+/** 把任意 post 事件收窄为消息事件。 */
 export function isMessageEvent(event: OneBotPostEvent): event is OneBotMessageEvent {
 	return event.post_type === "message";
 }
 
-/** A message as returned by the history APIs (get_*_msg_history). */
+/** 历史接口（get_*_msg_history）返回的一条消息。 */
 export interface HistoryMessage {
 	message_id?: string | number;
 	message_seq?: number;
@@ -55,12 +57,12 @@ export interface HistoryMessage {
 	group_id?: number;
 }
 
-/** `data` payload of `get_group_msg_history` / `get_friend_msg_history`. */
+/** `get_*_msg_history` 的 `data` 载荷。 */
 export interface MsgHistoryData {
 	messages?: HistoryMessage[];
 }
 
-/** `data` payload of `get_msg`. */
+/** `get_msg` 的 `data` 载荷。 */
 export interface GetMsgData {
 	message_id?: string | number;
 	message_type?: string;
@@ -70,28 +72,21 @@ export interface GetMsgData {
 	sender?: OneBotSender;
 }
 
-/** `data` payload of `get_login_info`. */
+/** `get_login_info` 的 `data` 载荷。 */
 export interface LoginInfoData {
 	user_id?: number;
 	nickname?: string;
 }
 
-/** `data` payload of `fetch_ptt_text` (NapCat voice-to-text). */
+/** `fetch_ptt_text`（NapCat 语音转写）的 `data` 载荷。 */
 export interface PttTextData {
 	text?: string;
 }
 
-/** A parsed chat reference (`private:<QQ>` / `group:<群号>`). */
-export type ChatRoute =
-	| { kind: "private"; user_id: number }
-	| { kind: "group"; group_id: number };
-
 /**
- * Per-segment-type text renderers. `text` keeps its content; every other
- * type falls back to the default renderer, which dumps ALL of the segment's
- * `data` as `key=value` pairs (plus the containing message id when given, so
- * the model can fetch content with `onebot_get_content`). Add more entries
- * here for types that need a custom shape.
+ * 按消息段类型渲染文本。`text` 段保留其内容；其余类型落到默认渲染器，把该段
+ * 的**全部** `data` 倾倒成 `key=value`（给了消息 id 时一并带上，使模型能用
+ * `onebot_get_content` 取内容）。需要自定义形状的类型在此加表项。
  */
 const SEGMENT_RENDERERS: Record<string, (segment: OneBotSegment, messageId?: string) => string> = {
 	text: (segment) => String(segment.data?.text ?? ""),
@@ -109,10 +104,9 @@ function renderSegment(segment: OneBotSegment | undefined, messageId?: string): 
 }
 
 /**
- * Render a message body (string or segment array) to plain text for the LLM
- * with ONE function: text segments keep their content, every other segment
- * renders per its type (default: all `data` fields as `key=value`, plus the
- * containing message id when provided).
+ * 用**一个**函数把消息体（字符串或消息段数组）渲染成给 LLM 的纯文本：text 段
+ * 保留内容，其余段按类型渲染（默认：全部 `data` 字段作 `key=value`，给了消息 id
+ * 时一并带上）。
  */
 export function messageToText(message: OneBotMessage | undefined | null, messageId?: string): string {
 	if (typeof message === "string") return message;
@@ -121,8 +115,7 @@ export function messageToText(message: OneBotMessage | undefined | null, message
 }
 
 /**
- * Best available display name: group card > nickname. Renders as
- * `name(QQ)` and falls back to the bare QQ number when no name is known.
+ * 可用的展示名：群名片 > 昵称。渲染为 `name(QQ)`，完全不知道名字时退回裸号码。
  */
 export function identity(sender: OneBotSender | undefined, userId: number | undefined): string {
 	const name = String(sender?.card ?? "").trim() || String(sender?.nickname ?? "").trim();
@@ -131,8 +124,7 @@ export function identity(sender: OneBotSender | undefined, userId: number | unde
 }
 
 /**
- * Split text into chunks of at most `maxChars` characters so long replies
- * stay under the QQ message length limit.
+ * 把文本切成每块至多 `maxChars` 个字符，使长回复不超出消息长度上限。
  */
 export function chunkText(text: string, maxChars: number): string[] {
 	if (maxChars <= 0) return [text];
@@ -153,8 +145,8 @@ export function chunkText(text: string, maxChars: number): string[] {
 }
 
 /**
- * Render history messages as readable text for the LLM, one per line:
- * `[HH:MM] name(QQ) 消息ID:<id>: text`.
+ * 把历史消息渲染成给 LLM 的可读文本，一行一条：
+ * `[HH:MM] name(QQ) 消息ID:<id>: text`。
  */
 export function formatHistory(messages: readonly HistoryMessage[] | undefined): string {
 	const out: string[] = [];
@@ -172,7 +164,7 @@ export function formatHistory(messages: readonly HistoryMessage[] | undefined): 
 }
 
 /**
- * Coerce a message id that may arrive as a JSON number or a string.
+ * 把可能以 JSON 数字或字符串到达的消息 id 统一成字符串。
  */
 export function parseMessageId(value: string | number | undefined): string {
 	if (typeof value === "number") return String(value);
@@ -180,21 +172,6 @@ export function parseMessageId(value: string | number | undefined): string {
 	return "";
 }
 
-/**
- * Parse an adapter-independent chat target (`private:<QQ>` / `group:<群号>`),
- * shared by the outbound (`onebot_send`) and read (`onebot_get_msg_history`)
- * tools and the bridge allowlist checks.
- */
-export function parseTarget(target: string | null | undefined): ChatRoute | null {
-	const [kind, id] = String(target ?? "").split(":");
-	if ((kind === "private" || kind === "group") && /^\d+$/.test(id)) {
-		return kind === "private"
-			? { kind, user_id: Number(id) }
-			: { kind, group_id: Number(id) };
-	}
-	return null;
-}
-
-// ── action builders ─────────────────────────────────────────────────────────
-// Outbound actions are typed directly by onebot.js (`WSSendParam`); see
-// bridge.sendReply and the tools for the call sites.
+// ── 动作构造 ────────────────────────────────────────────────────────────────
+// 出站与读历史的动作名一律由 adapter 声明提供（见 adapter/types.ts 的
+// RouteSpec）；本模块不含任何平台相关的 action 名。
