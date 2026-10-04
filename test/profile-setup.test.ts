@@ -12,7 +12,8 @@ const config: OnebotConfig = {
 	access_token: "",
 	prefix: "",
 	adapters: [{ type: "qq", config: { url: "ws://127.0.0.1:3001", friend_ids: [123], group_ids: [] } }],
-	workspace_root: "C:\\ws",
+	// 平台无关的路径样本（该字段不参与模板渲染）。
+	workspace_root: join(tmpdir(), "onebot-ws"),
 	connect_retries: 5,
 	connect_retry_delay_secs: 1,
 	reply_chunk_size: 4000,

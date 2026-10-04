@@ -3,8 +3,13 @@
 // 回归护栏 —— 种子模板必须和 loader 实际解析出的结果一致。
 //
 // 平台相关字段（各 adapter 自己的配置）的测试见 test/adapter.test.ts。
+//
+// 路径样本一律由 `node:os` 的临时目录拼出，断言只验证"怎么拼"，不验证"拼在哪个
+// 系统上" —— 这些测试在任何操作系统上跑都必须一样。
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, DEFAULTS, chatWorkspace, defaultWorkspaceRoot } from "../src/config.ts";
 import type { OnebotConfig } from "../src/config.ts";
@@ -36,7 +41,8 @@ test("workspace_root defaults to a stable non-empty path", () => {
 });
 
 test("a supplied workspace_root overrides the default", () => {
-	assert.equal(resolve({ workspace_root: "C:\\ws" }).workspace_root, "C:\\ws");
+	const supplied = join(tmpdir(), "onebot-ws");
+	assert.equal(resolve({ workspace_root: supplied }).workspace_root, supplied);
 });
 
 test("adapters default to one enabled adapter, and unknown types are rejected", () => {
@@ -96,9 +102,10 @@ test("resolved adapters are fresh objects, not the DEFAULTS array", () => {
 
 test("defaultWorkspaceRoot is stable and honours DSH_HOME", () => {
 	const previous = process.env.DSH_HOME;
+	const home = join(tmpdir(), "onebot-dsh-home");
 	try {
-		process.env.DSH_HOME = "C:\\dsh-home";
-		assert.equal(defaultWorkspaceRoot(), join("C:\\dsh-home", "workspaces", "onebot"));
+		process.env.DSH_HOME = home;
+		assert.equal(defaultWorkspaceRoot(), join(home, "workspaces", "onebot"));
 	} finally {
 		if (previous === undefined) delete process.env.DSH_HOME;
 		else process.env.DSH_HOME = previous;
@@ -107,11 +114,12 @@ test("defaultWorkspaceRoot is stable and honours DSH_HOME", () => {
 
 test("defaultWorkspaceRoot never depends on the launch directory", () => {
 	// 依赖 cwd 的根会让同一个会话 id 解析到不同的持久化 cwd，从而被
-	// session store 拒绝。
+	// session store 拒绝。换到一个新建的目录（必然不等于当前 cwd）再问一次。
 	const before = defaultWorkspaceRoot();
 	const previousCwd = process.cwd();
+	const elsewhere = mkdtempSync(join(tmpdir(), "onebot-cwd-"));
 	try {
-		process.chdir("C:\\");
+		process.chdir(elsewhere);
 		assert.equal(defaultWorkspaceRoot(), before);
 	} finally {
 		process.chdir(previousCwd);
@@ -119,8 +127,9 @@ test("defaultWorkspaceRoot never depends on the launch directory", () => {
 });
 
 test("chatWorkspace nests each chat under <root>/chats/<sessionId>", () => {
+	const root = join(tmpdir(), "onebot-ws");
 	assert.equal(
-		chatWorkspace("C:\\ws", "onebot-group-987654321"),
-		join("C:\\ws", "chats", "onebot-group-987654321"),
+		chatWorkspace(root, "onebot-group-987654321"),
+		join(root, "chats", "onebot-group-987654321"),
 	);
 });

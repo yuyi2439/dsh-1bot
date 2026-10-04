@@ -96,6 +96,11 @@ pnpm typecheck    # src + test 类型检查
 pnpm test         # 运行测试（Node ≥23.6 原生跑 .ts）
 ```
 
+**测试与平台无关**：断言里不得出现某个操作系统的字面量（盘符、反斜杠路径、专有
+目录名）；需要路径样本时用 `node:os` 的 `tmpdir()` / `homedir()` 配合 `join()`
+拼出来，`process.chdir` 之类改变全局状态的操作也要在同一测试里还原。时区、区域
+设置、临时目录位置等系统配置的差异都不能改变结果 —— CI 与发布都跑在 Linux 上。
+
 **测试不得反过来塑造主体代码**：`OneBotBridge` 拿的是完整的 `client` 与 `Context`，
 测试就照这个形状来 —— `new Context()` + `ctx.provide(名字, 假件)`
 （`test/bridge.test.ts` 的做法），而不是为了好替身而给生产代码加一层服务切片参数。

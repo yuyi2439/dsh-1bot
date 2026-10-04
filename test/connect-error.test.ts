@@ -3,6 +3,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:net";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { formatConnectFailure, probeForwardWsPort, redactAccessToken } from "../src/connect-error.ts";
 
 const ctx = {
@@ -11,7 +13,9 @@ const ctx = {
 	cause: "could not connect to ws://127.0.0.1:3001 after 6 attempts (close code 1006)",
 	attempts: 6,
 	delaySecs: 1,
-	patchPath: "C:\\Users\\me\\.dsh\\profiles\\onebot\\cordis.patch.yml",
+	// 解析后的路径（`$DSH_HOME` 未设时的默认位置）；由 node:os / node:path 拼出，
+	// 断言因此不绑某个系统的路径写法。
+	patchPath: join(homedir(), ".dsh", "profiles", "onebot", "cordis.patch.yml"),
 };
 
 test("connect failure report carries the evidence and the exact next command", () => {
